@@ -1,0 +1,233 @@
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import Card from "../components/ui/Card";
+import Button from "../components/ui/Button";
+import Badge from "../components/ui/Badge";
+import Modal from "../components/ui/Modal";
+import { Field, Input, Select, Textarea } from "../components/ui/FormField";
+import { ErrorText } from "../components/ui/Alerts";
+import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
+import { useConfirm } from "../components/ui/ConfirmProvider";
+import { getMisconductTypes, createMisconductType, updateMisconductType, deleteMisconductType } from "../api/sbms";
+import { capitalizeFirst } from "../utils/text";
+import { Plus, Pencil, Trash2 } from "lucide-react";
+
+const SEVERITY_TONE = { minor: "neutral", moderate: "warning", severe: "danger" };
+const DEDUCTION_TONE = {
+  minor: "bg-slate-50 text-slate-700 ring-1 ring-slate-200",
+  moderate: "bg-amber-50 text-amber-700 ring-1 ring-amber-200",
+  severe: "bg-red-50 text-red-700 ring-1 ring-red-200",
+};
+
+export default function MisconductTypes() {
+  const confirm = useConfirm();
+  const [types, setTypes] = useState(null);
+  const [editing, setEditing] = useState(null); // type being edited, or {} for new
+
+  function refresh() {
+    getMisconductTypes().then(setTypes);
+  }
+
+  useEffect(refresh, []);
+
+  async function handleDelete(type) {
+    const ok = await confirm({
+      title: "Disable this misconduct type?",
+      message: `"${type.title}" will no longer appear when picking a type — existing records that reference it are unaffected.`,
+      confirmText: "Disable",
+      tone: "danger",
+    });
+    if (!ok) return;
+    try {
+      await deleteMisconductType(type.id);
+      toast.success("Misconduct type disabled");
+      refresh();
+    } catch (err) {
+      toast.error("Couldn't disable type", { description: err.message });
+    }
+  }
+
+  return (
+    <Card
+      title="Misconduct types"
+      actions={
+        <Button onClick={() => setEditing({})}>
+          <Plus size={15} /> Add type
+        </Button>
+      }
+    >
+      <Table>
+        <Thead>
+          <tr>
+            <Th>Title</Th>
+            <Th>Severity</Th>
+            <Th>Default deduction</Th>
+            <Th>Scope</Th>
+            <Th></Th>
+          </tr>
+        </Thead>
+        <tbody>
+          {types === null ? (
+            <EmptyRow colSpan={5}>Loading...</EmptyRow>
+          ) : types.length === 0 ? (
+            <EmptyRow colSpan={5} />
+          ) : (
+            types.map((t) => (
+              <tr key={t.id}>
+                <Td>
+                  <p className="font-medium text-slate-800">{capitalizeFirst(t.title)}</p>
+                  {t.description && <p className="text-xs text-slate-400">{t.description}</p>}
+                  {t.requiresSendHome && (
+                    <p className="mt-1 text-xs text-amber-600 font-medium">
+                      Sent home {t.sendHomeDays} day{t.sendHomeDays === 1 ? "" : "s"}
+                    </p>
+                  )}
+                </Td>
+                <Td>
+                  <Badge tone={SEVERITY_TONE[t.severity] || "neutral"}>{t.severity}</Badge>
+                </Td>
+                <Td>
+                  <span
+                    className={`inline-flex items-center justify-center rounded-lg px-2.5 py-1 text-sm font-semibold tabular-nums ${
+                      DEDUCTION_TONE[t.severity] || DEDUCTION_TONE.minor
+                    }`}
+                  >
+                    -{t.defaultDeduction}
+                  </span>
+                </Td>
+                <Td>{t.schoolId ? t.School?.name || "This school" : "Global template"}</Td>
+                <Td>
+                  <div className="flex gap-2">
+                    <button onClick={() => setEditing(t)} className="text-slate-400 hover:text-brand-600" aria-label="Edit">
+                      <Pencil size={15} />
+                    </button>
+                    <button onClick={() => handleDelete(t)} className="text-slate-400 hover:text-red-600" aria-label="Disable">
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </Td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </Table>
+
+      {editing && (
+        <TypeModal
+          initial={editing}
+          onClose={() => setEditing(null)}
+          onDone={() => {
+            setEditing(null);
+            refresh();
+          }}
+        />
+      )}
+    </Card>
+  );
+}
+
+function TypeModal({ initial, onClose, onDone }) {
+  const isNew = !initial.id;
+  const [title, setTitle] = useState(initial.title || "");
+  const [description, setDescription] = useState(initial.description || "");
+  const [defaultDeduction, setDefaultDeduction] = useState(initial.defaultDeduction ?? 5);
+  const [severity, setSeverity] = useState(initial.severity || "minor");
+  const [requiresSendHome, setRequiresSendHome] = useState(initial.requiresSendHome ?? false);
+  const [sendHomeDays, setSendHomeDays] = useState(initial.sendHomeDays ?? 2);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    if (!title.trim()) {
+      setError("Title is required.");
+      return;
+    }
+    if (requiresSendHome && (!sendHomeDays || Number(sendHomeDays) <= 0)) {
+      setError("Enter how many days the student is sent home for.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const payload = {
+        title: title.trim(),
+        description: description.trim(),
+        defaultDeduction: Number(defaultDeduction),
+        severity,
+        requiresSendHome,
+        sendHomeDays: requiresSendHome ? Number(sendHomeDays) : null,
+      };
+      if (isNew) await createMisconductType(payload);
+      else await updateMisconductType(initial.id, payload);
+      toast.success(isNew ? "Misconduct type added" : "Misconduct type updated");
+      onDone();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={isNew ? "Add misconduct type" : "Edit misconduct type"} size="md">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <Field label="Title">
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Absent without permission" />
+        </Field>
+        <Field label="Description (optional)">
+          <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+        </Field>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Default deduction">
+            <Input type="number" min="1" value={defaultDeduction} onChange={(e) => setDefaultDeduction(e.target.value)} />
+          </Field>
+          <Field label="Severity">
+            <Select value={severity} onChange={(e) => setSeverity(e.target.value)}>
+              <option value="minor">Minor</option>
+              <option value="moderate">Moderate</option>
+              <option value="severe">Severe</option>
+            </Select>
+          </Field>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3">
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={requiresSendHome}
+              onChange={(e) => setRequiresSendHome(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400"
+            />
+            Requires sending the student home (weekend)
+          </label>
+          {requiresSendHome && (
+            <div className="mt-3 max-w-[160px]">
+              <Field label="Number of days">
+                <Input
+                  type="number"
+                  min="1"
+                  value={sendHomeDays}
+                  onChange={(e) => setSendHomeDays(e.target.value)}
+                />
+              </Field>
+              <p className="mt-1.5 text-xs text-slate-400">
+                Recording this incident will automatically fill in the sent-home date range.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <ErrorText>{error}</ErrorText>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={submitting}>
+            {submitting ? "Saving..." : "Save"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}

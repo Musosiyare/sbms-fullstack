@@ -1,0 +1,26 @@
+# dependencies
+node_modules/
+
+# env files (very important — DB credentials, JWT secrets, etc.)
+.env
+.env.local
+.env.production
+
+# logs
+*.log
+npm-debug.log*
+logs/
+
+# uploads (if you store user-uploaded files locally)
+uploads/
+
+# editor/OS
+.vscode/
+.DS_Store
+
+# build output (if you compile/transpile)
+dist/
+build/
+
+# Sequelize
+config/config.json

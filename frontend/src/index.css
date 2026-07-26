@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background: #f7f5f6;
+  color: #1e2433;
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+.role-ring-manager { box-shadow: 0 0 0 2px #2b3a67; }
+.role-ring-dod { box-shadow: 0 0 0 2px #7f1d3a; }
+.role-ring-officer { box-shadow: 0 0 0 2px #b45309; }
+.role-ring-reporter { box-shadow: 0 0 0 2px #0d9488; }
+
+.tabular-nums { font-variant-numeric: tabular-nums; }
+
+:focus-visible:not(.form-field) {
+  outline: 2px solid #b23a56;
+  outline-offset: 2px;
+}
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes stamp-in {
+  0% { opacity: 0; transform: rotate(-8deg) scale(0.85); }
+  60% { opacity: 1; transform: rotate(-3deg) scale(1.04); }
+  100% { opacity: 1; transform: rotate(-3deg) scale(1); }
+}
+.animate-rise-in { animation: rise-in 0.5s ease-out both; }
+.animate-stamp-in { animation: stamp-in 0.6s cubic-bezier(0.2, 0.8, 0.3, 1) 0.35s both; }
