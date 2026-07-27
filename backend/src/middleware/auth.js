@@ -1,26 +1,41 @@
 const jwt = require("jsonwebtoken");
 const ApiError = require("../utils/ApiError");
-const { User } = require("../models");
+const { User, School } = require("../models");
+const { resolveSbmsRole } = require("../utils/resolveSbmsRole");
 
 /**
  * Verifies the SBMS-specific JWT (signed with SBMS_JWT_SECRET, separate
  * from the main system's token) and attaches req.user.
  *
- * The token payload carries the person's *effective SBMS role*, resolved
- * once at login time (see authController.login): 'manager' passes straight
- * through from the shared users.role, while 'dean_of_discipline' /
- * 'disciplinary_officer' come from users.disciplineRole — a field assigned
- * in the *main* system's Disciplinary Staff page, not in SBMS. Anyone else
- * who can still log in (a plain teacher with no discipline role) gets
- * 'reporter' — enough to submit a pending report, nothing more. That
- * resolution logic lives in authController, not here.
+ * The token payload's sbmsRole was resolved once at login time (see
+ * authController.login), but this re-resolves it fresh from the database
+ * on every request (via the same resolveSbmsRole used at login) instead
+ * of trusting that stale copy — otherwise, revoking someone's discipline
+ * role in the main system's Disciplinary Staff page wouldn't take effect
+ * in an already-open SBMS session until the JWT itself expired (up to
+ * SBMS_JWT_EXPIRES_IN later). If they no longer resolve to any role at
+ * all — e.g. a 'discipline'-only account whose disciplineRole was
+ * cleared — the request is rejected outright with NO_SBMS_ROLE, the same
+ * way an expired token would be.
  *
  * This also re-checks status and tokenVersion against the database on
  * every request — same rigor as the main system. Without it, deactivating
  * someone or changing their password (which bumps tokenVersion — see
  * authController.changePassword) wouldn't actually end an already-open
  * SBMS session; it'd just silently keep working until the JWT's own
- * expiry, whenever that is.
+ * expiry, whenever that is. The school's own status gets the same
+ * treatment: if a school is deactivated in the main system mid-session,
+ * every account at that school loses SBMS access immediately rather than
+ * keeping a stale session alive until the token expires.
+ *
+ * The account-level rejections below (ACCOUNT_SUSPENDED, SCHOOL_DEACTIVATED,
+ * NO_SBMS_ROLE) use their own error codes instead of the generic
+ * "FORBIDDEN" that authorize() below uses — the frontend's response
+ * interceptor watches specifically for these codes to force-clear the
+ * session and redirect to login with an explanation, the same way it
+ * already does for an expired/invalid token. An ordinary permission
+ * error (wrong role for an action) should never log someone out, so it
+ * deliberately keeps the generic code.
  */
 async function authenticate(req, res, next) {
   const header = req.headers.authorization || "";
@@ -30,15 +45,46 @@ async function authenticate(req, res, next) {
   try {
     const payload = jwt.verify(token, process.env.SBMS_JWT_SECRET);
 
-    const user = await User.findByPk(payload.id, { attributes: ["id", "tokenVersion", "status"] });
-    if (!user || user.status !== "active") {
+    const user = await User.findByPk(payload.id, {
+      attributes: ["id", "tokenVersion", "status", "schoolId", "role", "disciplineRole"],
+    });
+    if (!user) {
       return next(ApiError.unauthorized("Session has ended. Please log in again."));
+    }
+    if (user.status !== "active") {
+      return next(
+        ApiError.forbidden(
+          "Your account has been suspended. Contact your school administrator to have it reactivated.",
+          "ACCOUNT_SUSPENDED"
+        )
+      );
     }
     if (payload.tokenVersion !== undefined && payload.tokenVersion !== user.tokenVersion) {
       return next(ApiError.unauthorized("Session has ended. Please log in again."));
     }
+    if (user.schoolId) {
+      const school = await School.findByPk(user.schoolId, { attributes: ["id", "status"] });
+      if (!school || school.status !== "active") {
+        return next(
+          ApiError.forbidden(
+            "Your school's account has been deactivated in the main system, so SBMS access is suspended for everyone at your school until it's reactivated there.",
+            "SCHOOL_DEACTIVATED"
+          )
+        );
+      }
+    }
 
-    req.user = payload; // { id, name, email, schoolId, sbmsRole, tokenVersion }
+    const sbmsRole = resolveSbmsRole(user);
+    if (!sbmsRole) {
+      return next(
+        ApiError.forbidden(
+          "This account no longer has a discipline role assigned in SBMS. Contact your school administrator to have a role assigned.",
+          "NO_SBMS_ROLE"
+        )
+      );
+    }
+
+    req.user = { ...payload, sbmsRole }; // { id, name, email, schoolId, sbmsRole, tokenVersion }, sbmsRole always freshly resolved
     next();
   } catch (err) {
     return next(ApiError.unauthorized("Invalid or expired token"));

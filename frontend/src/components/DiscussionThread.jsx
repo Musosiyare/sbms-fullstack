@@ -74,9 +74,10 @@ function MessageBubble({ msg, isSelf }) {
 
 /**
  * The thread itself: header (status + who opened/closed it), the message
- * list, a composer, and — only for the Dean of Discipline — the
- * open/close/reopen controls. `discussion` is `null` when nothing has
- * been started yet, `undefined` while loading.
+ * list, a composer, and the management controls. The Dean of Discipline
+ * and the school Manager have identical rights here — starting, closing,
+ * and reopening a thread. `discussion` is `null` when nothing has been
+ * started yet, `undefined` while loading.
  */
 export default function DiscussionThread({ record, discussion, currentUser, onChange }) {
   const [draft, setDraft] = useState("");
@@ -85,6 +86,8 @@ export default function DiscussionThread({ record, discussion, currentUser, onCh
   const [busy, setBusy] = useState(false);
 
   const isDod = currentUser.sbmsRole === "dean_of_discipline";
+  const isManager = currentUser.sbmsRole === "manager";
+  const canManage = isDod || isManager; // Dean of Discipline and Manager: start, close, reopen
   const canPost = discussion && discussion.status === "open";
 
   async function handleStart() {
@@ -150,7 +153,7 @@ export default function DiscussionThread({ record, discussion, currentUser, onCh
         <div className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-50 text-brand-500">
           <MessageCircle size={20} strokeWidth={2.25} />
         </div>
-        {isDod ? (
+        {canManage ? (
           <>
             <p className="text-sm text-slate-600">
               No discussion yet. Start one to loop in the teacher, discipline staff, and manager before deciding.
@@ -168,7 +171,8 @@ export default function DiscussionThread({ record, discussion, currentUser, onCh
           </>
         ) : (
           <p className="text-sm text-slate-500">
-            No discussion has been opened on this record yet. The Dean of Discipline can start one.
+            No discussion has been opened on this record yet. The Dean of Discipline or the school Manager can start
+            one.
           </p>
         )}
       </div>
@@ -244,8 +248,8 @@ export default function DiscussionThread({ record, discussion, currentUser, onCh
         </p>
       )}
 
-      {/* Dean of Discipline controls */}
-      {isDod && (
+      {/* Dean of Discipline / Manager controls */}
+      {canManage && (
         <div className="border-t border-slate-100 pt-3">
           {discussion.status === "open" ? (
             showCloseForm ? (

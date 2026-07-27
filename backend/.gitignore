@@ -1,26 +1,7 @@
-# dependencies
 node_modules/
-
-# env files (very important — DB credentials, JWT secrets, etc.)
 .env
-.env.local
-.env.production
 
-# logs
-*.log
-npm-debug.log*
-logs/
-
-# uploads (if you store user-uploaded files locally)
+# Uploaded evidence files (photos, PDFs, scans, Word docs) — user content,
+# never committed. The sbms_misconduct_evidence table tracks the metadata;
+# this is just where the actual files land on disk.
 uploads/
-
-# editor/OS
-.vscode/
-.DS_Store
-
-# build output (if you compile/transpile)
-dist/
-build/
-
-# Sequelize
-config/config.json

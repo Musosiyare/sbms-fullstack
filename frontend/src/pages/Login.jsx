@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { LOGIN_NOTICE_KEY } from "../api/client";
 import Button from "../components/ui/Button";
 import { Field, Input } from "../components/ui/FormField";
 import { ErrorText } from "../components/ui/Alerts";
@@ -17,6 +18,19 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+
+  // If the API interceptor just force-logged us out here (account
+  // suspended, or the school deactivated in the main system mid-session),
+  // it stashed the reason since a hard redirect can't carry React state.
+  // Surface it once, then clear it so it doesn't reappear on a later,
+  // unrelated visit to this page.
+  useEffect(() => {
+    const notice = sessionStorage.getItem(LOGIN_NOTICE_KEY);
+    if (notice) {
+      setError(notice);
+      sessionStorage.removeItem(LOGIN_NOTICE_KEY);
+    }
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();

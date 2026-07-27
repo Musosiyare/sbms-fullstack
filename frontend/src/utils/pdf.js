@@ -15,7 +15,11 @@ const SLATE_400 = [148, 163, 184];
 const SLATE_300 = [203, 213, 225];
 const SLATE_100 = [241, 245, 249];
 const EMERALD_700 = [4, 120, 87];
+const EMERALD_50 = [236, 253, 245];
+const RED_700 = [185, 28, 28];
+const RED_50 = [254, 242, 242];
 const AMBER_600 = [217, 119, 6];
+const AMBER_50 = [255, 251, 235];
 
 const STATUS_LABEL = {
   finalized: "Finalized",
@@ -510,6 +514,150 @@ export function exportConductReportPdf(reports, filename) {
     if (idx > 0) pdf.addPage();
     drawConductReportPage(pdf, report);
   });
+  pdf.save(filename);
+}
+
+/** Inclusive day count between two date strings, e.g. Fri–Sun = 3 days. */
+function inclusiveDayCount(from, to) {
+  const start = new Date(from);
+  const end = new Date(to);
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+  const days = Math.round((end - start) / 86400000) + 1;
+  return Math.max(1, days);
+}
+
+/**
+ * Builds the "Weekend Permission" slip for one approved send-home
+ * record — school letterhead, student name, reason, how many days
+ * they're to stay home and when they're expected back, and a Dean of
+ * Discipline signature line. Meant to be printed and handed to the
+ * student/guardian as proof the absence is authorized.
+ */
+export function exportWeekendPermissionPdf(data, filename) {
+  const { school, student, reason, sentHomeFrom, sentHomeTo, deanOfDiscipline } = data;
+  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+  let y = MARGIN + 6;
+
+  // Letterhead: school name, then address/phone/email underneath in a
+  // smaller, muted line — whichever of those the school actually has on
+  // file (all three are optional on the reference record).
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(16);
+  pdf.setTextColor(...SLATE_800);
+  pdf.text(school.name.toUpperCase(), A4.width / 2, y, { align: "center" });
+  y += 6;
+
+  const contactLine = [school.address, school.phone, school.email].filter(Boolean).join("   •   ");
+  if (contactLine) {
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(9);
+    pdf.setTextColor(...SLATE_500);
+    pdf.text(contactLine, A4.width / 2, y, { align: "center" });
+    y += 6;
+  }
+
+  y += 2;
+  pdf.setDrawColor(...SLATE_800);
+  pdf.setLineWidth(0.6);
+  pdf.line(MARGIN, y, A4.width - MARGIN, y);
+  y += 10;
+
+  // Status stamp — the one clear signal of whether this slip still proves
+  // an active, authorized absence (VALID) or is now just a record of one
+  // that's already over (EXPIRED). Kept downloadable either way; this is
+  // what tells the reader which case they're holding.
+  const isExpired = !!data.isExpired;
+  const stampColor = isExpired ? AMBER_600 : EMERALD_700;
+  const stampFill = isExpired ? AMBER_50 : EMERALD_50;
+  const stampLabel = isExpired ? "EXPIRED" : "VALID";
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(9.5);
+  const stampTextWidth = pdf.getTextWidth(stampLabel);
+  const stampPaddingX = 5;
+  const stampWidth = stampTextWidth + stampPaddingX * 2;
+  const stampHeight = 8;
+  const stampX = A4.width - MARGIN - stampWidth;
+  const stampY = y - stampHeight;
+  pdf.setFillColor(...stampFill);
+  pdf.setDrawColor(...stampColor);
+  pdf.setLineWidth(0.5);
+  pdf.roundedRect(stampX, stampY, stampWidth, stampHeight, 1.5, 1.5, "FD");
+  pdf.setTextColor(...stampColor);
+  // Centered both horizontally (align: center on the box's midpoint) and
+  // vertically ("middle" baseline against the box's own vertical midpoint).
+  pdf.text(stampLabel, stampX + stampWidth / 2, stampY + stampHeight / 2, { align: "center", baseline: "middle" });
+  y += 6;
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(15);
+  pdf.setTextColor(...SLATE_800);
+  pdf.text("WEEKEND PERMISSION", A4.width / 2, y, { align: "center" });
+  y += 4;
+  pdf.setDrawColor(...SLATE_300);
+  pdf.setLineWidth(0.3);
+  pdf.line(A4.width / 2 - 28, y, A4.width / 2 + 28, y);
+  y += 14;
+
+  const days = inclusiveDayCount(sentHomeFrom, sentHomeTo);
+  const studentName = `${student.firstName} ${student.lastName}${student.admissionNumber ? ` (${student.admissionNumber})` : ""}`;
+
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(11);
+  pdf.setTextColor(...SLATE_600);
+  const intro = `This confirms that the student named below has been granted permission to leave school and stay home, as decided by the discipline office.`;
+  const introLines = pdf.splitTextToSize(intro, CONTENT_WIDTH);
+  pdf.text(introLines, MARGIN, y);
+  y += introLines.length * 5.5 + 8;
+
+  const rows = [
+    ["Student", studentName],
+    ["Reason", capitalizeFirst(reason)],
+    ["Days to stay home", `${days} day${days === 1 ? "" : "s"}`],
+    ["Sent home from", formatDate(sentHomeFrom)],
+    ["Expected to return", formatDate(sentHomeTo)],
+  ];
+  const labelWidth = 42;
+  pdf.setTextColor(0, 0, 0);
+  rows.forEach(([label, value]) => {
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(8.5);
+    pdf.text(label.toUpperCase(), MARGIN, y);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(9.5);
+    pdf.text(value, MARGIN + labelWidth, y);
+    y += 6;
+  });
+
+  y += 6;
+  pdf.setFont("helvetica", "italic");
+  pdf.setFontSize(9.5);
+  pdf.setTextColor(...SLATE_600);
+  const closing = "The bearer should carry this slip and present it if asked to confirm the absence is authorized. It must be returned, signed, on the student's return to school.";
+  const closingLines = pdf.splitTextToSize(closing, CONTENT_WIDTH);
+  pdf.text(closingLines, MARGIN, y);
+  y += closingLines.length * 5 + 16;
+
+  // Dean of Discipline sign-off — right under the closing message, not
+  // pinned to the bottom of the page.
+  const footerY = y;
+  pdf.setDrawColor(...SLATE_400);
+  pdf.setLineWidth(0.3);
+  pdf.line(MARGIN, footerY, MARGIN + 65, footerY);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(9);
+  pdf.setTextColor(...SLATE_600);
+  pdf.text("Dean of Discipline — name & signature", MARGIN, footerY + 4.5);
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(10.5);
+  pdf.setTextColor(...SLATE_800);
+  pdf.text(deanOfDiscipline?.name || "Dean of Discipline", A4.width - MARGIN, footerY, { align: "right" });
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(8.5);
+  pdf.setTextColor(...SLATE_500);
+  pdf.text(formatDate(new Date()), A4.width - MARGIN, footerY + 4.5, { align: "right" });
+
   pdf.save(filename);
 }
 

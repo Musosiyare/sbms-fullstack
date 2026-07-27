@@ -17,14 +17,31 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// A regular 401 (missing/expired/invalid token) always meant "kick back to
+// login" — see below. These two codes get the exact same treatment even
+// though the server answers with 403: they mean the account or the whole
+// school was deactivated in the main system while this session was still
+// open, so the session is just as dead as an expired token. Without this,
+// someone already logged in would keep seeing whatever was last loaded and
+// only find out something was wrong the next time an action failed, one
+// confusing error at a time, without ever being told why or moved off the
+// page they were on.
+const SESSION_KILLED_CODES = ["ACCOUNT_SUSPENDED", "SCHOOL_DEACTIVATED", "NO_SBMS_ROLE"];
+const LOGIN_NOTICE_KEY = "sbms_login_notice";
+
 api.interceptors.response.use(
   (res) => res,
   (err) => {
     const apiError = err.response?.data?.error;
+    const status = err.response?.status;
+    const sessionKilled = status === 401 || (status === 403 && SESSION_KILLED_CODES.includes(apiError?.code));
 
-    if (err.response?.status === 401 && window.location.pathname !== "/login") {
+    if (sessionKilled && window.location.pathname !== "/login") {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
+      // Stashed for the Login page to show as soon as it mounts — the
+      // redirect below is a full page load, so React state can't carry it.
+      if (apiError?.message) sessionStorage.setItem(LOGIN_NOTICE_KEY, apiError.message);
       window.location.href = "/login";
     }
 
@@ -38,5 +55,5 @@ api.interceptors.response.use(
   }
 );
 
-export { TOKEN_KEY, USER_KEY };
+export { TOKEN_KEY, USER_KEY, LOGIN_NOTICE_KEY };
 export default api;

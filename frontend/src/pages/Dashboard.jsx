@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { toast } from "sonner";
 import { useAuth } from "../context/AuthContext";
 import Card from "../components/ui/Card";
 import Badge from "../components/ui/Badge";
 import Modal from "../components/ui/Modal";
 import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
-import { listRecords, getAcademicYears } from "../api/sbms";
+import { Field, Select, Textarea } from "../components/ui/FormField";
+import { ErrorText } from "../components/ui/Alerts";
+import EvidenceList from "../components/ui/EvidenceList";
+import EvidenceUpload, { EvidenceFieldLabel } from "../components/ui/EvidenceUpload";
+import { useConfirm } from "../components/ui/ConfirmProvider";
+import { listRecords, getAcademicYears, getMisconductTypes, updateReport, deleteReport, addEvidence } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
 import {
   FlagTriangleRight,
@@ -19,6 +25,10 @@ import {
   Home,
   FileWarning,
   MessageCircle,
+  Eye,
+  Paperclip,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import Button from "../components/ui/Button";
 import DiscussionModal from "../components/DiscussionModal";
@@ -204,8 +214,9 @@ function SentHomeModal({ open, onClose, records }) {
  * A teacher/reporter's own tracking view: what they've flagged, and where
  * each one landed — still pending, approved, or rejected (with the reason).
  */
-function MyReportsOverview({ records, user }) {
+function MyReportsOverview({ records, user, onRecordsChange }) {
   const [discussTarget, setDiscussTarget] = useState(null);
+  const [viewTarget, setViewTarget] = useState(null);
   const mine = useMemo(() => {
     if (!records) return null;
     return records.filter((r) => r.reportedBy?.id === user.id);
@@ -220,6 +231,9 @@ function MyReportsOverview({ records, user }) {
       rejected: mine.filter((r) => r.status === "rejected").length,
     };
   }, [mine]);
+
+  // Keep the modal's data in sync after an evidence delete inside it.
+  const viewRecord = viewTarget && mine ? mine.find((r) => r.id === viewTarget.id) || viewTarget : viewTarget;
 
   return (
     <Card title="My reports" subtitle="Mistakes you've flagged, and how each one was handled.">
@@ -252,7 +266,16 @@ function MyReportsOverview({ records, user }) {
                 mine.slice(0, 10).map((r) => (
                   <tr key={r.id}>
                     <Td className="font-medium text-slate-800">
-                      {r.Student?.firstName} {r.Student?.lastName}
+                      <span className="inline-flex items-center gap-1.5">
+                        {r.Student?.firstName} {r.Student?.lastName}
+                        {r.evidence?.length > 0 && (
+                          <Paperclip
+                            size={12}
+                            className="shrink-0 text-slate-400"
+                            title={`${r.evidence.length} file(s) attached`}
+                          />
+                        )}
+                      </span>
                     </Td>
                     <Td>{capitalizeFirst(r.MisconductType?.title) || r.customTitle || "—"}</Td>
                     <Td>
@@ -263,9 +286,14 @@ function MyReportsOverview({ records, user }) {
                     </Td>
                     <Td className="text-slate-500">{fmtDate(r.createdAt)}</Td>
                     <Td>
-                      <Button size="sm" variant="ghost" onClick={() => setDiscussTarget(r)}>
-                        <MessageCircle size={14} /> Discuss
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => setViewTarget(r)}>
+                          <Eye size={14} /> View
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={() => setDiscussTarget(r)}>
+                          <MessageCircle size={14} /> Discuss
+                        </Button>
+                      </div>
                     </Td>
                   </tr>
                 ))
@@ -277,7 +305,174 @@ function MyReportsOverview({ records, user }) {
       {discussTarget && (
         <DiscussionModal record={discussTarget} currentUser={user} onClose={() => setDiscussTarget(null)} />
       )}
+      {viewRecord && (
+        <MyReportDetailModal
+          record={viewRecord}
+          currentUser={user}
+          onClose={() => setViewTarget(null)}
+          onEvidenceChange={onRecordsChange}
+          onRecordDeleted={onRecordsChange}
+        />
+      )}
     </Card>
+  );
+}
+
+/**
+ * Opened from the eye icon on "My reports" — the full incident + evidence
+ * for one of the teacher's own reports. While the report hasn't been
+ * approved yet, they can also fix the incident type/description here (and
+ * attach more evidence), or delete the report entirely; both are blocked
+ * the moment it's `finalized` (mirrors the backend rule).
+ */
+function MyReportDetailModal({ record, currentUser, onClose, onEvidenceChange, onRecordDeleted }) {
+  const confirm = useConfirm();
+  const [editing, setEditing] = useState(false);
+  const [types, setTypes] = useState(null);
+  const [misconductTypeId, setMisconductTypeId] = useState(record.MisconductType?.id ?? record.misconductTypeId ?? "");
+  const [description, setDescription] = useState(record.description || "");
+  const [files, setFiles] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+
+  const canModify = record.reportedByUserId === currentUser.id && record.status !== "finalized";
+
+  function startEdit() {
+    setMisconductTypeId(record.MisconductType?.id ?? record.misconductTypeId ?? "");
+    setDescription(record.description || "");
+    setFiles([]);
+    setError("");
+    setEditing(true);
+    if (!types) getMisconductTypes().then(setTypes);
+  }
+
+  async function handleSave() {
+    if (!misconductTypeId) {
+      setError("Pick an incident from the list.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      await updateReport(record.id, {
+        misconductTypeId,
+        description: description.trim() || undefined,
+      });
+      if (files.length > 0) {
+        await addEvidence(record.id, files);
+      }
+      toast.success("Report updated");
+      setEditing(false);
+      setFiles([]);
+      onEvidenceChange?.();
+    } catch (err) {
+      setError(err.message || "Couldn't update report");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    const ok = await confirm({
+      title: "Delete this report?",
+      message: "This permanently deletes the report and any evidence attached to it. This can't be undone.",
+      confirmText: "Delete",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      await deleteReport(record.id);
+      toast.success("Report deleted");
+      onRecordDeleted?.();
+      onClose();
+    } catch (err) {
+      toast.error("Couldn't delete report", { description: err.message });
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Report details" size="sm">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-slate-800">
+            {record.Student?.firstName} {record.Student?.lastName}
+          </p>
+          <Badge tone={PUNISHED_TONE[record.status]}>{PUNISHED_LABEL[record.status]}</Badge>
+        </div>
+
+        {editing ? (
+          <div className="flex flex-col gap-3 mt-1">
+            <Field label="Incident">
+              <Select value={misconductTypeId} onChange={(e) => setMisconductTypeId(e.target.value)} disabled={!types}>
+                <option value="">{types ? "Select..." : "Loading..."}</option>
+                {types?.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {capitalizeFirst(t.title)} (-{t.defaultDeduction})
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Additional notes (optional)">
+              <Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
+            </Field>
+            <Field label={<EvidenceFieldLabel />}>
+              <EvidenceUpload
+                files={files}
+                disabled={saving}
+                onChange={(next, uploadError) => {
+                  setFiles(next);
+                  if (uploadError) setError(uploadError);
+                }}
+              />
+              <p className="mt-1 text-xs text-slate-400">New files are attached in addition to what's already there.</p>
+            </Field>
+            <ErrorText>{error}</ErrorText>
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={handleSave} disabled={saving}>
+                {saving ? "Saving..." : "Save"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={saving}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="text-sm text-slate-600">
+              {capitalizeFirst(record.MisconductType?.title) || record.customTitle || "No incident type given"}
+            </p>
+            {record.description && <p className="text-sm text-slate-500">{record.description}</p>}
+            {record.status === "rejected" && record.rejectionReason && (
+              <p className="text-xs text-red-500">Reason: {record.rejectionReason}</p>
+            )}
+            {record.status === "finalized" && (
+              <p className="text-xs text-slate-400">-{record.marksDeducted} marks deducted</p>
+            )}
+            <p className="text-xs text-slate-400">Reported {fmtDate(record.createdAt)}</p>
+          </>
+        )}
+
+        {record.evidence?.length > 0 && (
+          <div className="mt-1 pt-2 border-t border-slate-100">
+            <EvidenceList record={record} currentUser={currentUser} onChange={onEvidenceChange} />
+          </div>
+        )}
+
+        {!editing && canModify && (
+          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-100">
+            <Button size="sm" variant="secondary" onClick={startEdit}>
+              <Pencil size={14} /> Edit
+            </Button>
+            <Button size="sm" variant="danger" onClick={handleDelete} disabled={deleting}>
+              <Trash2 size={14} /> {deleting ? "Deleting..." : "Delete"}
+            </Button>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -287,19 +482,23 @@ export default function Dashboard() {
   const showOverview = CAN_SEE_QUEUE.includes(user.sbmsRole);
   const showMyReports = user.sbmsRole === "reporter";
 
-  useEffect(() => {
-    if (!showOverview && !showMyReports) return;
-    // The dashboard is a "what's happening right now" view, so it always
-    // reflects whichever academic year the main system currently has set
-    // — not a mix of every year ever recorded. (Full history, including
-    // past years, is still available from the Records page.)
-    getAcademicYears()
+  function refreshRecords() {
+    return getAcademicYears()
       .then((years) => {
         const current = years.find((y) => y.isCurrent) || years[0];
         if (!current) return setRecords([]);
         return listRecords({ academicYearId: current.id }).then(setRecords);
       })
       .catch(() => setRecords([]));
+  }
+
+  useEffect(() => {
+    if (!showOverview && !showMyReports) return;
+    // The dashboard is a "what's happening right now" view, so it always
+    // reflects whichever academic year the main system currently has set
+    // — not a mix of every year ever recorded. (Full history, including
+    // past years, is still available from the Records page.)
+    refreshRecords();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.sbmsRole]);
 
@@ -308,7 +507,7 @@ export default function Dashboard() {
       <p className="text-slate-600 mb-6">Welcome back, {user.name?.split(" ")[0]}.</p>
 
       {showOverview && <DisciplineOverview records={records} />}
-      {showMyReports && <MyReportsOverview records={records} user={user} />}
+      {showMyReports && <MyReportsOverview records={records} user={user} onRecordsChange={refreshRecords} />}
 
       <div className="grid sm:grid-cols-2 gap-4">
         {["manager", "disciplinary_officer", "reporter"].includes(user.sbmsRole) && (

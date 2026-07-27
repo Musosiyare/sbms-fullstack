@@ -5,6 +5,7 @@ import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
 import { Field, Select, Textarea } from "../components/ui/FormField";
 import { ErrorText, TermLockBadge, AllTermsLockedNotice } from "../components/ui/Alerts";
+import EvidenceUpload, { EvidenceFieldLabel } from "../components/ui/EvidenceUpload";
 import { useScopePicker } from "../hooks/useScopePicker";
 import { createReport, getMisconductTypes } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
@@ -15,6 +16,7 @@ export default function ReportMistake() {
   const [types, setTypes] = useState(null);
   const [misconductTypeId, setMisconductTypeId] = useState("");
   const [description, setDescription] = useState("");
+  const [files, setFiles] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -36,18 +38,22 @@ export default function ReportMistake() {
 
     setSubmitting(true);
     try {
-      await createReport({
-        studentId: scope.studentId,
-        termId: scope.termId,
-        academicYearId: scope.academicYearId,
-        misconductTypeId,
-        description: description.trim() || undefined,
-      });
+      await createReport(
+        {
+          studentId: scope.studentId,
+          termId: scope.termId,
+          academicYearId: scope.academicYearId,
+          misconductTypeId,
+          description: description.trim() || undefined,
+        },
+        files
+      );
       toast.success("Report submitted", {
         description: "The discipline office will review it.",
       });
       setMisconductTypeId("");
       setDescription("");
+      setFiles([]);
       scope.setStudentId("");
     } catch (err) {
       toast.error("Couldn't submit report", { description: err.message });
@@ -144,6 +150,17 @@ export default function ReportMistake() {
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Anything else worth adding..."
+          />
+        </Field>
+
+        <Field label={<EvidenceFieldLabel />}>
+          <EvidenceUpload
+            files={files}
+            disabled={submitting}
+            onChange={(next, uploadError) => {
+              setFiles(next);
+              if (uploadError) setError(uploadError);
+            }}
           />
         </Field>
 

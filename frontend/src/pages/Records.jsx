@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "../context/AuthContext";
 import Card from "../components/ui/Card";
@@ -7,6 +8,8 @@ import Badge from "../components/ui/Badge";
 import Modal from "../components/ui/Modal";
 import { Field, Select, Input, Textarea } from "../components/ui/FormField";
 import { ErrorText, TermLockBadge, AllTermsLockedNotice } from "../components/ui/Alerts";
+import EvidenceUpload, { EvidenceFieldLabel } from "../components/ui/EvidenceUpload";
+import EvidenceList from "../components/ui/EvidenceList";
 import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
 import Pagination from "../components/ui/Pagination";
 import { useScopePicker } from "../hooks/useScopePicker";
@@ -17,14 +20,17 @@ import {
   bulkApproveRecords,
   bulkRejectRecords,
   createRecord,
+  bulkClassRecord,
   getMisconductTypes,
   getAcademicYears,
   getClasses,
   getStudents,
   getTerms,
+  getWeekendPermission,
 } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
-import { Plus, Check, X, ChevronDown, Eye, ClipboardList, Users, GraduationCap, Clock, AlertTriangle, MessageCircle } from "lucide-react";
+import { exportWeekendPermissionPdf } from "../utils/pdf";
+import { Plus, Check, X, ChevronDown, Eye, ClipboardList, Users, GraduationCap, Clock, AlertTriangle, MessageCircle, Paperclip, Download, Info } from "lucide-react";
 import DiscussionModal from "../components/DiscussionModal";
 
 const CAN_FINALIZE = ["dean_of_discipline", "disciplinary_officer"];
@@ -37,6 +43,16 @@ const ROLE_LABEL = { manager: "Manager", teacher: "Teacher", superuser: "Superus
 function roleLabel(u) {
   if (!u) return null;
   return DISCIPLINE_ROLE_LABEL[u.disciplineRole] || ROLE_LABEL[u.role] || null;
+}
+
+/** Fetches the Weekend Permission data for a finalized send-home record and triggers the PDF download. */
+async function downloadWeekendPermission(recordId, studentName) {
+  try {
+    const data = await getWeekendPermission(recordId);
+    exportWeekendPermissionPdf(data, `weekend-permission-${studentName.replace(/\s+/g, "-").toLowerCase()}.pdf`);
+  } catch (err) {
+    toast.error("Couldn't generate the permission slip", { description: err.message });
+  }
 }
 // Mirrors the colored deduction pill used on the Misconduct Types page, so
 // a record's marks read the same severity-tinted way wherever they appear.
@@ -97,6 +113,12 @@ function SentHomeInfo({ from, to, showStatus = true }) {
 
 function toDateOnly(date) {
   return date.toISOString().slice(0, 10);
+}
+
+/** Whether a send-home period's return date has already passed — the permission slip stops making sense once it has. */
+function isSendHomeExpired(sentHomeTo) {
+  if (!sentHomeTo) return false;
+  return toDateOnly(new Date(sentHomeTo)) < toDateOnly(new Date());
 }
 
 /**
@@ -160,6 +182,9 @@ function SectionTabs({ active, onChange }) {
 export default function Records() {
   const { user } = useAuth();
   const canFinalize = CAN_FINALIZE.includes(user.sbmsRole);
+  // Class-wide deduction is Dean of Discipline only — narrower than
+  // canFinalize, which also includes Disciplinary Officers.
+  const isDOD = user.sbmsRole === "dean_of_discipline";
 
   const [activeTab, setActiveTab] = useState("reports");
   const [statusFilter, setStatusFilter] = useState("pending");
@@ -169,6 +194,7 @@ export default function Records() {
   const [rejectTarget, setRejectTarget] = useState(null); // record being rejected
   const [discussTarget, setDiscussTarget] = useState(null); // record whose discussion thread is open
   const [showNewRecord, setShowNewRecord] = useState(false);
+  const [showClassDeduct, setShowClassDeduct] = useState(false);
   const [viewStudent, setViewStudent] = useState(null); // { id, firstName, lastName } whose history is open
   const [selectedIds, setSelectedIds] = useState(new Set()); // pending record ids picked for a bulk action
   const [bulkApproveOpen, setBulkApproveOpen] = useState(false);
@@ -309,9 +335,16 @@ export default function Records() {
         actions={
           canFinalize &&
           isCurrentYearSelected && (
-            <Button onClick={() => setShowNewRecord(true)}>
-              <Plus size={15} /> New record
-            </Button>
+            <div className="flex items-center gap-2">
+              {isDOD && (
+                <Button variant="secondary" onClick={() => setShowClassDeduct(true)}>
+                  <Users size={15} /> Deduct from class
+                </Button>
+              )}
+              <Button onClick={() => setShowNewRecord(true)}>
+                <Plus size={15} /> New record
+              </Button>
+            </div>
           )
         }
       >
@@ -436,7 +469,14 @@ export default function Records() {
                   <Td>
                     {r.Student?.firstName} {r.Student?.lastName}
                   </Td>
-                  <Td>{capitalizeFirst(r.MisconductType?.title) || r.customTitle || "—"}</Td>
+                  <Td>
+                    <span className="inline-flex items-center gap-1.5">
+                      {capitalizeFirst(r.MisconductType?.title) || r.customTitle || "—"}
+                      {r.evidence?.length > 0 && (
+                        <Paperclip size={12} className="shrink-0 text-slate-400" title={`${r.evidence.length} file(s) attached`} />
+                      )}
+                    </span>
+                  </Td>
                   <Td>
                     <MarksPill record={r} />
                   </Td>
@@ -465,6 +505,19 @@ export default function Records() {
                         <p className="text-slate-700">{r.finalizedBy.name}</p>
                         {roleLabel(r.finalizedBy) && <p className="text-xs text-slate-400">{roleLabel(r.finalizedBy)}</p>}
                         <p className="text-xs text-slate-400">{new Date(r.finalizedAt).toLocaleDateString()}</p>
+                        {r.sentHomeFrom && r.sentHomeTo && user.sbmsRole !== "disciplinary_officer" && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              downloadWeekendPermission(r.id, `${r.Student?.firstName || ""} ${r.Student?.lastName || ""}`)
+                            }
+                            className={`mt-1 inline-flex items-center gap-1 text-xs font-medium hover:underline ${
+                              isSendHomeExpired(r.sentHomeTo) ? "text-amber-600" : "text-brand-600"
+                            }`}
+                          >
+                            <Download size={12} /> Permission
+                          </button>
+                        )}
                       </>
                     ) : r.status === "rejected" && r.rejectedBy ? (
                       <>
@@ -481,7 +534,7 @@ export default function Records() {
                   </Td>
                   <Td>
                     <div className="flex flex-col gap-1 items-start">
-                      <Button size="sm" variant="ghost" onClick={() => setDiscussTarget(r)}>
+                      <Button size="sm" variant="secondary" onClick={() => setDiscussTarget(r)}>
                         <MessageCircle size={14} /> Discuss
                       </Button>
                     </div>
@@ -596,6 +649,17 @@ export default function Records() {
           onClose={() => setShowNewRecord(false)}
           onDone={() => {
             setShowNewRecord(false);
+            refresh();
+          }}
+        />
+      )}
+
+      {showClassDeduct && (
+        <ClassDeductModal
+          types={types}
+          onClose={() => setShowClassDeduct(false)}
+          onDone={() => {
+            setShowClassDeduct(false);
             refresh();
           }}
         />
@@ -890,8 +954,12 @@ function StudentRecordsModal({ student, currentUser, onClose }) {
   const [records, setRecords] = useState(null);
   const [termLabels, setTermLabels] = useState({}); // termId -> "Term 2 · 2025-2026"
 
-  useEffect(() => {
+  function refresh() {
     listRecords({ studentId: student.id }).then(setRecords);
+  }
+
+  useEffect(() => {
+    refresh();
   }, [student.id]);
 
   useEffect(() => {
@@ -991,6 +1059,12 @@ function StudentRecordsModal({ student, currentUser, onClose }) {
                         <SentHomeInfo from={r.sentHomeFrom} to={r.sentHomeTo} showStatus={false} />
                       </div>
                     )}
+
+                    {r.evidence?.length > 0 && (
+                      <div className="mt-2.5 pt-2.5 border-t border-slate-100">
+                        <EvidenceList record={r} currentUser={currentUser} onChange={refresh} />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1003,6 +1077,8 @@ function StudentRecordsModal({ student, currentUser, onClose }) {
 }
 
 /** Groups a student's records by term and computes a running marks balance. */
+
+
 function groupRecordsByTerm(records, termLabels) {
   if (!records || records.length === 0) return [];
 
@@ -1049,8 +1125,10 @@ function ApproveModal({ record, onClose, onDone }) {
   const [sentHomeTo, setSentHomeTo] = useState(defaultRange.to);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [approved, setApproved] = useState(false);
 
   const deduction = record.MisconductType?.defaultDeduction;
+  const studentName = `${record.Student?.firstName || ""} ${record.Student?.lastName || ""}`;
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -1064,7 +1142,14 @@ function ApproveModal({ record, onClose, onDone }) {
       toast.success("Report approved", {
         description: `${deduction} mark${deduction === 1 ? "" : "s"} deducted from ${record.Student?.firstName}.`,
       });
-      onDone();
+      // A send-home incident means there's now a permission slip to hand
+      // the student — pause here so it can be downloaded right away,
+      // instead of closing straight back to the list.
+      if (requiresSendHome) {
+        setApproved(true);
+      } else {
+        onDone();
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1080,6 +1165,11 @@ function ApproveModal({ record, onClose, onDone }) {
         </p>
         <p>{capitalizeFirst(record.MisconductType?.title) || record.customTitle || "No incident type given"}</p>
         {record.description && <p className="mt-1 text-slate-500">{record.description}</p>}
+        {record.evidence?.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-slate-200">
+            <EvidenceList record={record} readOnly />
+          </div>
+        )}
         {(record.reportedBy || record.finalizedBy) && (
           <div className="mt-1 text-xs text-slate-400">
             <p>
@@ -1093,7 +1183,29 @@ function ApproveModal({ record, onClose, onDone }) {
         )}
       </div>
 
-      {officerBlocked ? (
+      {approved ? (
+        <div className="flex flex-col gap-4">
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3.5 text-sm text-emerald-700 flex items-start gap-2.5">
+            <Check size={18} className="shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">Approved</p>
+              <p className="mt-0.5 text-emerald-600/90">
+                {isSendHomeExpired(sentHomeTo)
+                  ? "The send-home period is recorded, but the return date entered has already passed — the permission slip will be stamped EXPIRED."
+                  : "The send-home period is recorded — download the permission slip for the Dean of Discipline to sign and hand to the student."}
+              </p>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onDone}>
+              Done
+            </Button>
+            <Button type="button" onClick={() => downloadWeekendPermission(record.id, studentName)}>
+              <Download size={14} /> Download permission
+            </Button>
+          </div>
+        </div>
+      ) : officerBlocked ? (
         <div className="flex flex-col gap-4">
           <ErrorText>
             This incident sends the student home, so it needs the Dean of Discipline's review — Disciplinary
@@ -1179,6 +1291,12 @@ function RejectModal({ record, onClose, onDone }) {
           {record.Student?.firstName} {record.Student?.lastName}
         </p>
         <p>{capitalizeFirst(record.MisconductType?.title) || record.customTitle || "No incident type given"}</p>
+        {record.description && <p className="mt-1 text-slate-500">{record.description}</p>}
+        {record.evidence?.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-slate-200">
+            <EvidenceList record={record} readOnly />
+          </div>
+        )}
         {record.reportedBy && (
           <div className="mt-1 text-xs text-slate-400">
             <p>
@@ -1415,12 +1533,274 @@ function BulkRejectModal({ ids, records, onClose, onDone }) {
   );
 }
 
-function NewRecordModal({ types, onClose, onDone }) {
+/**
+ * Dean of Discipline only — deducts the same marks from every active
+ * student in a class at once (e.g. "the whole class refused to clean the
+ * classroom"), instead of creating one record per student. Mirrors
+ * NewRecordModal's catalog/custom picker, minus evidence upload and
+ * send-home dates (see bulkClassRecord on the backend for why both are
+ * left out of the bulk path). A roster checklist lets specific students
+ * be left out of an otherwise class-wide action — e.g. students who were
+ * absent, or who did clean up while the rest of the class didn't.
+ */
+function ClassDeductModal({ types, onClose, onDone }) {
   const scope = useScopePicker();
   const [misconductTypeId, setMisconductTypeId] = useState("");
   const [customTitle, setCustomTitle] = useState("");
   const [marksDeducted, setMarksDeducted] = useState("");
   const [description, setDescription] = useState("");
+  const [useCustom, setUseCustom] = useState(false);
+  const [excludedIds, setExcludedIds] = useState(new Set());
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  // Starting fresh with nobody excluded whenever the roster changes (new
+  // class picked) — an exclusion from a previous class shouldn't carry
+  // over and silently apply to the wrong roster.
+  useEffect(() => {
+    setExcludedIds(new Set());
+  }, [scope.classId]);
+
+  const selectedType = types.find((t) => String(t.id) === misconductTypeId);
+  const blockedBySendHome = !useCustom && !!selectedType?.requiresSendHome;
+  const targetCount = Math.max(scope.students.length - excludedIds.size, 0);
+
+  function toggleExcluded(studentId) {
+    setExcludedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(studentId)) next.delete(studentId);
+      else next.add(studentId);
+      return next;
+    });
+  }
+
+  function handleTypeChange(id) {
+    setMisconductTypeId(id);
+    const type = types.find((t) => String(t.id) === id);
+    if (type) setMarksDeducted(String(type.defaultDeduction));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    if (!scope.classId || !scope.termId || !scope.academicYearId) {
+      setError("Pick the class and term.");
+      return;
+    }
+    if (!useCustom && !misconductTypeId) {
+      setError("Pick a misconduct type, or switch to a custom entry.");
+      return;
+    }
+    if (blockedBySendHome) {
+      setError("This incident sends students home — it can't be applied to a whole class. Record it individually instead.");
+      return;
+    }
+    if (useCustom && !customTitle.trim()) {
+      setError("Enter a title for this custom entry.");
+      return;
+    }
+    if (!marksDeducted || Number(marksDeducted) <= 0) {
+      setError("Marks deducted must be a positive number.");
+      return;
+    }
+    if (targetCount === 0) {
+      setError("Every student in this class is excluded — nobody would receive this deduction.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const result = await bulkClassRecord({
+        classId: scope.classId,
+        termId: scope.termId,
+        academicYearId: scope.academicYearId,
+        misconductTypeId: useCustom ? undefined : misconductTypeId,
+        customTitle: useCustom ? customTitle.trim() : undefined,
+        marksDeducted: Number(marksDeducted),
+        description: description.trim() || undefined,
+        excludeStudentIds: [...excludedIds],
+      });
+      toast.success("Class deduction applied", {
+        description: `${result.count} student${result.count === 1 ? "" : "s"} in ${result.className} had -${result.marksDeducted} marks recorded.`,
+      });
+      onDone();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Deduct marks from a whole class" size="lg">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <p className="text-xs text-slate-400 -mt-1">
+          Applies the same deduction to every active student in the class at once — finalized immediately, no
+          review needed. Uncheck any students below to leave them out.
+        </p>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <Field label="Academic year">
+            <Select value={scope.academicYearId} onChange={(e) => scope.setAcademicYearId(e.target.value)}>
+              <option value="">Select...</option>
+              {scope.academicYears.map((y) => (
+                <option key={y.id} value={y.id}>
+                  {y.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Term">
+            <Select value={scope.termId} onChange={(e) => scope.setTermId(e.target.value)} disabled={!scope.terms.length}>
+              <option value="">Select...</option>
+              {scope.terms.map((t) => (
+                <option key={t.id} value={t.id} disabled={t.isLocked}>
+                  {t.name}
+                  {t.isLocked ? " (locked)" : ""}
+                </option>
+              ))}
+            </Select>
+            <TermLockBadge term={scope.terms.find((t) => String(t.id) === String(scope.termId))} />
+          </Field>
+        </div>
+
+        {scope.terms.length > 0 && scope.terms.every((t) => t.isLocked) && <AllTermsLockedNotice />}
+
+        <Field label="Class">
+          <Select value={scope.classId} onChange={(e) => scope.setClassId(e.target.value)} disabled={!scope.classes.length}>
+            <option value="">Select...</option>
+            {scope.classes.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+
+        <div className="flex items-center gap-2 text-sm">
+          <button
+            type="button"
+            onClick={() => setUseCustom(false)}
+            className={`px-3 py-1.5 rounded-lg border ${!useCustom ? "bg-brand-50 border-brand-200 text-brand-600" : "border-slate-200 text-slate-500"}`}
+          >
+            From catalog
+          </button>
+          <button
+            type="button"
+            onClick={() => setUseCustom(true)}
+            className={`px-3 py-1.5 rounded-lg border ${useCustom ? "bg-brand-50 border-brand-200 text-brand-600" : "border-slate-200 text-slate-500"}`}
+          >
+            Custom entry
+          </button>
+        </div>
+
+        {useCustom ? (
+          <Field label="Title">
+            <Input value={customTitle} onChange={(e) => setCustomTitle(e.target.value)} placeholder="e.g. Refused to clean the classroom" />
+          </Field>
+        ) : (
+          <Field label="Misconduct type">
+            <Select value={misconductTypeId} onChange={(e) => handleTypeChange(e.target.value)}>
+              <option value="">Select...</option>
+              {types
+                .filter((t) => !t.requiresSendHome)
+                .map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.title} (-{t.defaultDeduction})
+                  </option>
+                ))}
+            </Select>
+            <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-600">
+              <Info size={14} className="shrink-0 mt-0.5" />
+              <span>
+                Only incident types that don't send a student home are shown here — those need to be recorded per
+                student instead.
+              </span>
+            </p>
+          </Field>
+        )}
+
+        {blockedBySendHome && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3.5 text-sm text-red-700 flex items-start gap-2.5">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">Can't be applied to a whole class</p>
+              <p className="mt-0.5 text-red-600/90">
+                This incident sends a student home — that's a per-student decision. Use "New record" for each
+                student individually instead.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {useCustom ? (
+          <Field label="Marks deducted">
+            <Input type="number" min="1" value={marksDeducted} onChange={(e) => setMarksDeducted(e.target.value)} />
+          </Field>
+        ) : (
+          <Field label="Marks deducted">
+            <div className="w-full rounded-xl border border-slate-200 bg-slate-100 px-3.5 py-2.5 text-sm text-slate-600">
+              {misconductTypeId ? (
+                <>
+                  <span className="font-semibold text-slate-800">-{marksDeducted}</span> — set by the misconduct type,
+                  not editable here.
+                </>
+              ) : (
+                "Pick a misconduct type above to see its deduction."
+              )}
+            </div>
+          </Field>
+        )}
+
+        <Field label="Notes (optional)">
+          <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+        </Field>
+
+        {scope.classId && (
+          <Field label={`Students (${targetCount} of ${scope.students.length} will receive this)`}>
+            {scope.students.length === 0 ? (
+              <p className="text-xs text-slate-400">No active students in this class.</p>
+            ) : (
+              <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">
+                {scope.students.map((s) => (
+                  <label key={s.id} className="flex items-center gap-2.5 px-3.5 py-2 text-sm cursor-pointer hover:bg-slate-50">
+                    <input
+                      type="checkbox"
+                      checked={!excludedIds.has(s.id)}
+                      onChange={() => toggleExcluded(s.id)}
+                      className="rounded border-slate-300"
+                    />
+                    <span className="text-slate-700">
+                      {s.firstName} {s.lastName}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </Field>
+        )}
+
+        <ErrorText>{error}</ErrorText>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={submitting || blockedBySendHome || targetCount === 0}>
+            {submitting ? "Applying..." : `Apply to ${targetCount || 0} student${targetCount === 1 ? "" : "s"}`}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function NewRecordModal({ types, onClose, onDone }) {
+  const { user } = useAuth();
+  const scope = useScopePicker();
+  const [misconductTypeId, setMisconductTypeId] = useState("");
+  const [customTitle, setCustomTitle] = useState("");
+  const [marksDeducted, setMarksDeducted] = useState("");
+  const [description, setDescription] = useState("");
+  const [files, setFiles] = useState([]);
   const [sentHomeFrom, setSentHomeFrom] = useState("");
   const [sentHomeTo, setSentHomeTo] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -1454,6 +1834,10 @@ function NewRecordModal({ types, onClose, onDone }) {
       .finally(() => setCheckingStudent(false));
   }, [scope.studentId]);
 
+  const selectedType = types.find((t) => String(t.id) === misconductTypeId);
+  const officerBlockedBySendHome =
+    user.sbmsRole === "disciplinary_officer" && !useCustom && !!selectedType?.requiresSendHome;
+
   function handleTypeChange(id) {
     setMisconductTypeId(id);
     const type = types.find((t) => String(t.id) === id);
@@ -1485,6 +1869,10 @@ function NewRecordModal({ types, onClose, onDone }) {
       setError("Pick a misconduct type, or switch to a custom entry.");
       return;
     }
+    if (officerBlockedBySendHome) {
+      setError("This incident sends a student home — submit it as a report for the Dean of Discipline to review instead.");
+      return;
+    }
     if (useCustom && !customTitle.trim()) {
       setError("Enter a title for this custom entry.");
       return;
@@ -1496,17 +1884,20 @@ function NewRecordModal({ types, onClose, onDone }) {
 
     setSubmitting(true);
     try {
-      await createRecord({
-        studentId: scope.studentId,
-        termId: scope.termId,
-        academicYearId: scope.academicYearId,
-        misconductTypeId: useCustom ? undefined : misconductTypeId,
-        customTitle: useCustom ? customTitle.trim() : undefined,
-        marksDeducted: Number(marksDeducted),
-        description: description.trim() || undefined,
-        sentHomeFrom: sentHomeFrom || undefined,
-        sentHomeTo: sentHomeTo || undefined,
-      });
+      await createRecord(
+        {
+          studentId: scope.studentId,
+          termId: scope.termId,
+          academicYearId: scope.academicYearId,
+          misconductTypeId: useCustom ? undefined : misconductTypeId,
+          customTitle: useCustom ? customTitle.trim() : undefined,
+          marksDeducted: Number(marksDeducted),
+          description: description.trim() || undefined,
+          sentHomeFrom: sentHomeFrom || undefined,
+          sentHomeTo: sentHomeTo || undefined,
+        },
+        files
+      );
       toast.success("Record saved", { description: "The mark deduction has been applied." });
       onDone();
     } catch (err) {
@@ -1625,6 +2016,22 @@ function NewRecordModal({ types, onClose, onDone }) {
           </Field>
         )}
 
+        {!useCustom && officerBlockedBySendHome && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3.5 text-sm text-red-700 flex items-start gap-2.5">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">Needs the Dean of Discipline</p>
+              <p className="mt-0.5 text-red-600/90">
+                This incident sends a student home, so Disciplinary Officers can't record it directly — submit
+                it as a report instead and the Dean of Discipline will review and approve it.
+              </p>
+              <Link to="/report" className="mt-1.5 inline-block font-medium underline">
+                Go to Report a mistake
+              </Link>
+            </div>
+          </div>
+        )}
+
         {useCustom ? (
           <Field label="Marks deducted">
             <Input type="number" min="1" value={marksDeducted} onChange={(e) => setMarksDeducted(e.target.value)} />
@@ -1648,7 +2055,18 @@ function NewRecordModal({ types, onClose, onDone }) {
           <Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
         </Field>
 
-        {!useCustom && types.find((t) => String(t.id) === misconductTypeId)?.requiresSendHome && (
+        <Field label={<EvidenceFieldLabel />}>
+          <EvidenceUpload
+            files={files}
+            disabled={submitting}
+            onChange={(next, uploadError) => {
+              setFiles(next);
+              if (uploadError) setError(uploadError);
+            }}
+          />
+        </Field>
+
+        {!useCustom && selectedType?.requiresSendHome && !officerBlockedBySendHome && (
           <>
             <p className="-mb-2 text-xs text-amber-600">
               This incident sends the student home — dates below were filled in automatically; adjust if needed.
@@ -1671,7 +2089,7 @@ function NewRecordModal({ types, onClose, onDone }) {
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" disabled={submitting || !!studentWarning}>
+          <Button type="submit" disabled={submitting || !!studentWarning || officerBlockedBySendHome}>
             {submitting ? "Saving..." : "Save record"}
           </Button>
         </div>

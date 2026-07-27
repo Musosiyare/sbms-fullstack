@@ -104,7 +104,7 @@ export default function Discussions() {
                 ? "No open discussions right now."
                 : "No discussions have been closed yet."}
             </p>
-            {user.sbmsRole === "dean_of_discipline" && tab === "open" && (
+            {["dean_of_discipline", "manager"].includes(user.sbmsRole) && tab === "open" && (
               <p className="max-w-sm text-xs text-slate-400">
                 Start one from a record's "Discuss" button on the Records page.
               </p>

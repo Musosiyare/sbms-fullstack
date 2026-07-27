@@ -12,6 +12,7 @@ const TeacherModuleAssignment = require("./reference/TeacherModuleAssignment");
 // SBMS-owned tables.
 const MisconductType = require("./MisconductType");
 const MisconductRecord = require("./MisconductRecord");
+const MisconductEvidence = require("./MisconductEvidence");
 const Discussion = require("./Discussion");
 const DiscussionMessage = require("./DiscussionMessage");
 
@@ -41,6 +42,11 @@ MisconductRecord.belongsTo(MisconductType, { foreignKey: "misconductTypeId" });
 MisconductRecord.belongsTo(User, { as: "reportedBy", foreignKey: "reportedByUserId" });
 MisconductRecord.belongsTo(User, { as: "finalizedBy", foreignKey: "finalizedByUserId" });
 MisconductRecord.belongsTo(User, { as: "rejectedBy", foreignKey: "rejectedByUserId" });
+
+// --- MisconductEvidence -> MisconductRecord / User ---
+MisconductRecord.hasMany(MisconductEvidence, { foreignKey: "misconductRecordId", as: "evidence" });
+MisconductEvidence.belongsTo(MisconductRecord, { foreignKey: "misconductRecordId" });
+MisconductEvidence.belongsTo(User, { as: "uploadedBy", foreignKey: "uploadedByUserId" });
 
 // --- Discussion -> MisconductRecord, one thread per record ---
 MisconductRecord.hasOne(Discussion, { foreignKey: "misconductRecordId" });
@@ -72,6 +78,7 @@ module.exports = {
   TeacherModuleAssignment,
   MisconductType,
   MisconductRecord,
+  MisconductEvidence,
   Discussion,
   DiscussionMessage,
 };

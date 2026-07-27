@@ -1,7 +1,7 @@
 const { Discussion, DiscussionMessage, MisconductRecord, Student, MisconductType, User } = require("../models");
 const ApiError = require("../utils/ApiError");
 
-const CAN_MANAGE = ["dean_of_discipline"]; // only the Dean opens/closes/reopens a thread
+const CAN_MANAGE = ["dean_of_discipline", "manager"]; // Dean of Discipline and the school Manager can start, close, and reopen a thread
 const AUTHOR_INCLUDE = { model: User, as: "author", attributes: ["id", "name", "role", "disciplineRole"] };
 
 /**
@@ -36,10 +36,10 @@ const DISCUSSION_INCLUDE = [
 ];
 
 /**
- * Dean of Discipline starts a case-conference thread on a record. Fails
- * if one already exists (open or closed) — reopen() is the way back into
- * an existing thread, so history never forks into two threads for the
- * same record.
+ * Dean of Discipline or the school Manager starts a case-conference
+ * thread on a record. Fails if one already exists (open or closed) —
+ * reopen() is the way back into an existing thread, so history never
+ * forks into two threads for the same record.
  */
 async function open(req, res, next) {
   try {
@@ -86,7 +86,7 @@ async function open(req, res, next) {
   }
 }
 
-/** Dean of Discipline ends a discussion — no more messages can be posted until it's reopened. */
+/** Dean of Discipline or the school Manager ends a discussion — no more messages can be posted until it's reopened. */
 async function close(req, res, next) {
   try {
     if (!CAN_MANAGE.includes(req.user.sbmsRole)) return next(ApiError.forbidden());
@@ -110,7 +110,7 @@ async function close(req, res, next) {
   }
 }
 
-/** Dean of Discipline reopens a closed thread — same row, same history, just live again. */
+/** Dean of Discipline or the school Manager reopens a closed thread — same row, same history, just live again. */
 async function reopen(req, res, next) {
   try {
     if (!CAN_MANAGE.includes(req.user.sbmsRole)) return next(ApiError.forbidden());

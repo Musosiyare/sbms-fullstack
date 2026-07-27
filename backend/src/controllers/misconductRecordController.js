@@ -1,8 +1,51 @@
+const fs = require("fs");
+const path = require("path");
 const { Op } = require("sequelize");
-const { MisconductRecord, MisconductType, Student, Class, User, TeacherModuleAssignment, Term } = require("../models");
+const {
+  MisconductRecord,
+  MisconductType,
+  MisconductEvidence,
+  Student,
+  Class,
+  User,
+  TeacherModuleAssignment,
+  Term,
+  Discussion,
+  DiscussionMessage,
+  sequelize,
+} = require("../models");
 const ApiError = require("../utils/ApiError");
+const { EVIDENCE_DIR } = require("../middleware/upload");
 
 const CAN_FINALIZE = ["dean_of_discipline", "disciplinary_officer"];
+
+const EVIDENCE_INCLUDE = {
+  model: MisconductEvidence,
+  as: "evidence",
+  include: [{ model: User, as: "uploadedBy", attributes: ["id", "name", "role", "disciplineRole"] }],
+};
+
+/**
+ * Persists whatever files multer already wrote to disk (see
+ * middleware/upload.js) as MisconductEvidence rows against a record.
+ * Called right after a report/record is created, and from the standalone
+ * "add more evidence" endpoint — same shape either way, so this is the
+ * one place that turns req.files into database rows.
+ */
+async function saveEvidenceFiles(files, record, userId) {
+  if (!files || files.length === 0) return;
+  await MisconductEvidence.bulkCreate(
+    files.map((file) => ({
+      misconductRecordId: record.id,
+      schoolId: record.schoolId,
+      fileName: file.originalname,
+      storedName: file.filename,
+      mimeType: file.mimetype,
+      fileSize: file.size,
+      uploadedByUserId: userId,
+    }))
+  );
+}
 
 function toDateOnly(date) {
   return date.toISOString().slice(0, 10);
@@ -166,6 +209,9 @@ async function createReport(req, res, next) {
       reportedByUserId: req.user.id,
       reportedByRole: req.user.sbmsRole,
     });
+
+    await saveEvidenceFiles(req.files, record, req.user.id);
+    await record.reload({ include: [EVIDENCE_INCLUDE] });
     res.status(201).json(record);
   } catch (err) {
     next(err);
@@ -223,6 +269,20 @@ async function createRecord(req, res, next) {
     if (student.schoolId !== req.schoolId) return next(ApiError.forbidden());
 
     const sendHome = resolveSendHomeRange(type, sentHomeFrom, sentHomeTo);
+
+    // Mirrors the restriction on approveOneRecord: sending a student home
+    // is a judgment call reserved for the Dean of Discipline. A
+    // Disciplinary Officer catching this kind of incident themselves
+    // can't finalize it on the spot — they have to submit it as a report
+    // (createReport) so the Dean of Discipline reviews and approves it.
+    if (req.user.sbmsRole === "disciplinary_officer" && sendHome.sentHomeFrom) {
+      return next(
+        ApiError.forbidden(
+          "This incident sends a student home — Disciplinary Officers can't record it directly. Submit it as a report instead so the Dean of Discipline can review it."
+        )
+      );
+    }
+
     if (sendHome.sentHomeFrom) await assertNoActiveSendHome(studentId);
 
     const record = await MisconductRecord.create({
@@ -247,7 +307,127 @@ async function createRecord(req, res, next) {
       finalizedByRole: req.user.sbmsRole,
       finalizedAt: new Date(),
     });
+
+    await saveEvidenceFiles(req.files, record, req.user.id);
+    await record.reload({ include: [EVIDENCE_INCLUDE] });
     res.status(201).json(record);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Dean of Discipline deducts the same conduct marks from every active
+ * student in a class at once — e.g. "the whole class refused to clean
+ * the classroom" — instead of creating one record per student by hand.
+ *
+ * Deliberately restricted to the Dean of Discipline only, unlike the rest
+ * of CAN_FINALIZE — this moves marks for an entire class in a single
+ * action with no per-student review, so it doesn't get the same access a
+ * Disciplinary Officer has for one-at-a-time records.
+ *
+ * Records are created already finalized (marks move immediately), same
+ * as createRecord — there's no "whole-class report -> review" pathway,
+ * since a pile of 30+ pending reports from one review step wouldn't be
+ * any lighter than doing it one by one.
+ *
+ * Incidents flagged requiresSendHome are refused outright: sending an
+ * entire class home in one click is exactly the kind of call that needs
+ * to happen per student, not in bulk. Use createRecord/createReport for
+ * those instead.
+ *
+ * `excludeStudentIds` lets the Dean of Discipline leave specific students
+ * out of an otherwise class-wide action — e.g. two students who were
+ * absent that day, or who did clean up while the rest of the class didn't.
+ *
+ * Evidence upload isn't supported here (unlike createReport/createRecord)
+ * — a single photo/file would end up attached to every student's separate
+ * record, and deleting or replacing it later from any one student's
+ * record would pull it out from under all the others. Attach evidence to
+ * individual records afterward with addEvidence if needed.
+ */
+async function bulkClassRecord(req, res, next) {
+  try {
+    if (req.user.sbmsRole !== "dean_of_discipline") return next(ApiError.forbidden());
+
+    const {
+      classId,
+      termId,
+      academicYearId,
+      misconductTypeId,
+      customTitle,
+      description,
+      marksDeducted,
+      excludeStudentIds,
+    } = req.body;
+
+    if (!classId || !termId || !academicYearId) {
+      return next(ApiError.badRequest("classId, termId and academicYearId are required"));
+    }
+    if (!misconductTypeId && !customTitle) {
+      return next(ApiError.badRequest("Pick a misconduct type or enter a custom title", "misconductTypeId"));
+    }
+    await assertTermOpen(termId, academicYearId);
+
+    let type = null;
+    if (misconductTypeId) {
+      type = await MisconductType.findByPk(misconductTypeId);
+      if (!type) return next(ApiError.notFound("Misconduct type not found"));
+      if (type.requiresSendHome) {
+        return next(
+          ApiError.badRequest(
+            "This incident sends students home — it can't be applied to a whole class at once. Record it for each student individually.",
+            "misconductTypeId"
+          )
+        );
+      }
+    }
+
+    const deduction = type ? type.defaultDeduction : Number(marksDeducted);
+    if (!deduction || deduction <= 0) {
+      return next(ApiError.badRequest("Marks deducted must be a positive number", "marksDeducted"));
+    }
+
+    const klass = await Class.findByPk(classId);
+    if (!klass || klass.schoolId !== req.schoolId) return next(ApiError.notFound("Class not found"));
+
+    const excludeSet = new Set((Array.isArray(excludeStudentIds) ? excludeStudentIds : []).map(Number));
+    const students = await Student.findAll({ where: { classId: klass.id, status: "active" } });
+    const targets = students.filter((s) => !excludeSet.has(s.id));
+    if (targets.length === 0) {
+      return next(ApiError.badRequest("No students to apply this to — check the class roster or your exclusions"));
+    }
+
+    const records = await Promise.all(
+      targets.map((student) =>
+        MisconductRecord.create({
+          schoolId: req.schoolId,
+          studentId: student.id,
+          classId: klass.id,
+          academicYearId,
+          termId,
+          misconductTypeId: misconductTypeId || null,
+          customTitle: customTitle || null,
+          description,
+          marksDeducted: deduction,
+          status: "finalized",
+          reportedByUserId: req.user.id,
+          reportedByRole: req.user.sbmsRole,
+          finalizedByUserId: req.user.id,
+          finalizedByRole: req.user.sbmsRole,
+          finalizedAt: new Date(),
+        })
+      )
+    );
+
+    res.status(201).json({
+      classId: klass.id,
+      className: klass.name,
+      marksDeducted: deduction,
+      count: records.length,
+      excluded: excludeSet.size,
+      records,
+    });
   } catch (err) {
     next(err);
   }
@@ -468,13 +648,16 @@ async function bulkReject(req, res, next) {
 
 async function list(req, res, next) {
   try {
-    const { studentId, classId, termId, academicYearId, status } = req.query;
+    const { studentId, classId, termId, academicYearId, status, mine } = req.query;
     const where = { schoolId: req.schoolId };
     if (studentId) where.studentId = studentId;
     if (classId) where.classId = classId;
     if (termId) where.termId = termId;
     if (academicYearId) where.academicYearId = academicYearId;
     if (status) where.status = status;
+    // A teacher fetching just what they personally reported (e.g. the
+    // teacher-facing "My Reports" view) rather than the full queue.
+    if (mine === "true") where.reportedByUserId = req.user.id;
 
     const records = await MisconductRecord.findAll({
       where,
@@ -484,6 +667,7 @@ async function list(req, res, next) {
         { model: User, as: "reportedBy", attributes: ["id", "name", "role", "disciplineRole"] },
         { model: User, as: "finalizedBy", attributes: ["id", "name", "role", "disciplineRole"] },
         { model: User, as: "rejectedBy", attributes: ["id", "name", "role", "disciplineRole"] },
+        EVIDENCE_INCLUDE,
       ],
       order: [["createdAt", "DESC"]],
     });
@@ -502,6 +686,7 @@ async function getOne(req, res, next) {
         { model: User, as: "reportedBy", attributes: ["id", "name", "role", "disciplineRole"] },
         { model: User, as: "finalizedBy", attributes: ["id", "name", "role", "disciplineRole"] },
         { model: User, as: "rejectedBy", attributes: ["id", "name", "role", "disciplineRole"] },
+        EVIDENCE_INCLUDE,
       ],
     });
     if (!record || record.schoolId !== req.schoolId) return next(ApiError.notFound("Record not found"));
@@ -511,4 +696,192 @@ async function getOne(req, res, next) {
   }
 }
 
-module.exports = { createReport, createRecord, approve, reject, bulkApprove, bulkReject, list, getOne };
+/**
+ * Lets whoever raised a report fix a mistake in it — wrong incident type
+ * or a typo in the description — while discipline hasn't yet acted on it.
+ * Blocked only once `finalized` (marks have already moved on the strength
+ * of what was submitted, so it becomes part of the historical record).
+ * Editing a `rejected` report puts it back to `pending`: it silently
+ * staying "rejected" after being corrected would hide the change from the
+ * review queue, and re-raising it is the whole point of fixing it.
+ */
+async function updateReport(req, res, next) {
+  try {
+    const record = await MisconductRecord.findByPk(req.params.id);
+    if (!record || record.schoolId !== req.schoolId) return next(ApiError.notFound("Report not found"));
+    if (record.reportedByUserId !== req.user.id) {
+      return next(ApiError.forbidden("You can only edit a report you submitted"));
+    }
+    if (record.status === "finalized") {
+      return next(ApiError.conflict("A report can't be edited once it's been approved"));
+    }
+
+    const { misconductTypeId, description } = req.body;
+    if (misconductTypeId !== undefined) {
+      const type = await MisconductType.findByPk(misconductTypeId);
+      if (!type || type.schoolId !== req.schoolId) {
+        return next(ApiError.badRequest("Pick a valid incident from the list", "misconductTypeId"));
+      }
+      record.misconductTypeId = misconductTypeId;
+    }
+    if (description !== undefined) record.description = description || null;
+
+    if (record.status === "rejected") {
+      record.status = "pending";
+      record.rejectionReason = null;
+      record.rejectedByUserId = null;
+      record.rejectedByRole = null;
+      record.rejectedAt = null;
+    }
+
+    await record.save();
+    await record.reload({ include: [EVIDENCE_INCLUDE] });
+    res.json(record);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Lets whoever raised a report withdraw it entirely — blocked only once
+ * `finalized` (approved records are the historical, mark-affecting
+ * record and can't be pulled out from under it; a rejected report is
+ * still fair game to withdraw). Cleans up everything hanging off the
+ * record — evidence files/rows and any discipline discussion thread —
+ * so nothing is left pointing at a record that no longer exists.
+ */
+async function deleteReport(req, res, next) {
+  try {
+    const record = await MisconductRecord.findByPk(req.params.id, { include: [EVIDENCE_INCLUDE] });
+    if (!record || record.schoolId !== req.schoolId) return next(ApiError.notFound("Report not found"));
+    if (record.reportedByUserId !== req.user.id) {
+      return next(ApiError.forbidden("You can only delete a report you submitted"));
+    }
+    if (record.status === "finalized") {
+      return next(ApiError.conflict("A report can't be deleted once it's been approved"));
+    }
+
+    const evidenceFiles = record.evidence.map((e) => path.join(EVIDENCE_DIR, e.storedName));
+
+    await sequelize.transaction(async (t) => {
+      const discussion = await Discussion.findOne({ where: { misconductRecordId: record.id }, transaction: t });
+      if (discussion) {
+        await DiscussionMessage.destroy({ where: { discussionId: discussion.id }, transaction: t });
+        await discussion.destroy({ transaction: t });
+      }
+      await MisconductEvidence.destroy({ where: { misconductRecordId: record.id }, transaction: t });
+      await record.destroy({ transaction: t });
+    });
+
+    evidenceFiles.forEach((filePath) => fs.unlink(filePath, () => {})); // best-effort cleanup
+
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Attaches more evidence to an already-existing record — e.g. the Dean of
+ * Discipline asks for another photo, or a teacher forgot one at report
+ * time. Anyone who could have created the record in the first place can
+ * add to it; unlike deleteEvidence, this isn't restricted to 'pending'
+ * only, since adding context is harmless even after a record is decided.
+ */
+async function addEvidence(req, res, next) {
+  try {
+    const record = await MisconductRecord.findByPk(req.params.id);
+    if (!record || record.schoolId !== req.schoolId) return next(ApiError.notFound("Record not found"));
+    if (!req.files || req.files.length === 0) {
+      return next(ApiError.badRequest("Attach at least one file", "evidence"));
+    }
+
+    await saveEvidenceFiles(req.files, record, req.user.id);
+    await record.reload({ include: [EVIDENCE_INCLUDE] });
+    res.status(201).json(record);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Streams an evidence file back to whoever's authenticated and in the
+ * same school as the record it's attached to — never served statically,
+ * so a file can never leak across schools just by guessing a URL.
+ * Content-Disposition stays "inline" so images/PDFs preview in the
+ * browser instead of forcing a download; the original filename is
+ * restored either way.
+ */
+async function downloadEvidence(req, res, next) {
+  try {
+    const record = await MisconductRecord.findByPk(req.params.id);
+    if (!record || record.schoolId !== req.schoolId) return next(ApiError.notFound("Record not found"));
+
+    const evidence = await MisconductEvidence.findByPk(req.params.evidenceId);
+    if (!evidence || evidence.misconductRecordId !== record.id) {
+      return next(ApiError.notFound("Evidence not found"));
+    }
+
+    const filePath = path.join(EVIDENCE_DIR, evidence.storedName);
+    if (!fs.existsSync(filePath)) return next(ApiError.notFound("Evidence file is missing on the server"));
+
+    res.setHeader("Content-Type", evidence.mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(evidence.fileName)}"`);
+    res.sendFile(filePath);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Removes an evidence file — blocked only once the record has been
+ * approved/finalized (marks have moved on the strength of that evidence,
+ * so it becomes part of the historical record and can't be pulled out
+ * from under it). A pending or rejected report can still have its
+ * evidence removed. Only whoever uploaded a given file can remove it —
+ * discipline staff review the report but didn't create the evidence, so
+ * they can't delete someone else's.
+ */
+async function deleteEvidence(req, res, next) {
+  try {
+    const record = await MisconductRecord.findByPk(req.params.id);
+    if (!record || record.schoolId !== req.schoolId) return next(ApiError.notFound("Record not found"));
+
+    const evidence = await MisconductEvidence.findByPk(req.params.evidenceId);
+    if (!evidence || evidence.misconductRecordId !== record.id) {
+      return next(ApiError.notFound("Evidence not found"));
+    }
+
+    if (record.status === "finalized") {
+      return next(ApiError.conflict("Evidence can't be removed once a report has been approved"));
+    }
+    if (evidence.uploadedByUserId !== req.user.id) {
+      return next(ApiError.forbidden("You can only remove evidence you uploaded"));
+    }
+
+    const filePath = path.join(EVIDENCE_DIR, evidence.storedName);
+    await evidence.destroy();
+    fs.unlink(filePath, () => {}); // best-effort; a dangling file on disk is harmless once the row is gone
+
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  createReport,
+  createRecord,
+  bulkClassRecord,
+  approve,
+  reject,
+  bulkApprove,
+  bulkReject,
+  list,
+  getOne,
+  updateReport,
+  deleteReport,
+  addEvidence,
+  downloadEvidence,
+  deleteEvidence,
+};

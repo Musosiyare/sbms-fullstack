@@ -289,6 +289,89 @@ async function classYearlyConductReport(req, res, next) {
   }
 }
 
+/**
+ * Everything needed to print the "Weekend Permission" slip for one
+ * finalized, send-home record: school header (name/address/phone/email),
+ * student name, the reason (misconduct type title or custom title), the
+ * send-home date range, and the Dean of Discipline's name for the
+ * signature line. Only finalized records with both send-home dates set
+ * qualify — anything else means the student was never actually sent
+ * home, so there's nothing to hand them proof of.
+ *
+ * Disciplinary Officers don't get this slip — approving a send-home
+ * incident is reserved for the Dean of Discipline (see
+ * misconductRecordController), so the permission it produces stays out
+ * of the Officer's hands too.
+ */
+async function weekendPermission(req, res, next) {
+  try {
+    if (req.user.sbmsRole === "disciplinary_officer") {
+      return next(ApiError.forbidden("Disciplinary Officers don't have access to the weekend permission slip."));
+    }
+
+    const record = await MisconductRecord.findByPk(req.params.recordId, {
+      include: [
+        { model: Student },
+        { model: MisconductType },
+        { model: User, as: "finalizedBy", attributes: ["id", "name", "email", "disciplineRole"] },
+      ],
+    });
+    if (!record || record.schoolId !== req.schoolId) return next(ApiError.notFound("Record not found"));
+    if (record.status !== "finalized" || !record.sentHomeFrom || !record.sentHomeTo) {
+      return next(ApiError.badRequest("This record isn't an approved send-home incident — nothing to print."));
+    }
+
+    // Once the return date has passed, the slip no longer proves an
+    // ongoing authorized absence — but it's still a legitimate record of
+    // one that happened, so it stays downloadable. It just gets stamped
+    // EXPIRED instead of VALID so it's never mistaken for a live pass.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const returnDate = new Date(record.sentHomeTo);
+    returnDate.setHours(0, 0, 0, 0);
+    const isExpired = returnDate < today;
+
+    const school = await School.findByPk(req.schoolId);
+
+    // The Dean of Discipline signs the slip. Whoever finalized this
+    // particular record is the natural signer if they hold that role;
+    // otherwise fall back to whoever currently holds it at the school, the
+    // same way the conduct reports do.
+    let dean = record.finalizedBy?.disciplineRole === "dean_of_discipline" ? record.finalizedBy : null;
+    if (!dean) {
+      dean = await User.findOne({
+        where: { schoolId: req.schoolId, disciplineRole: "dean_of_discipline", status: "active" },
+        attributes: ["id", "name", "email"],
+        order: [["id", "ASC"]],
+      });
+    }
+
+    res.json({
+      school: {
+        id: school.id,
+        name: school.name,
+        address: school.address,
+        phone: school.phone,
+        email: school.email,
+      },
+      student: {
+        id: record.Student.id,
+        firstName: record.Student.firstName,
+        lastName: record.Student.lastName,
+        admissionNumber: record.Student.admissionNumber,
+      },
+      reason: record.MisconductType?.title || record.customTitle || "Untitled incident",
+      sentHomeFrom: record.sentHomeFrom,
+      sentHomeTo: record.sentHomeTo,
+      isExpired,
+      deanOfDiscipline: dean ? { name: dean.name, email: dean.email } : null,
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   classReport,
   studentReport,
@@ -296,4 +379,5 @@ module.exports = {
   classConductReport,
   studentYearlyConductReport,
   classYearlyConductReport,
+  weekendPermission,
 };
