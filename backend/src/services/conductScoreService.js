@@ -1,3 +1,4 @@
+const { Op } = require("sequelize");
 const { MisconductRecord, Term, sequelize } = require("../models");
 
 // Per Theo: 40 marks per term, 3 terms per year.
@@ -137,6 +138,56 @@ async function getClassScores(classId, termId, academicYearId) {
   );
 }
 
+/**
+ * Caps how many marks a new finalized record is actually allowed to take,
+ * so a student's termly balance never goes negative. Once a term's 40
+ * marks are already gone, further incidents still get recorded (the
+ * paper trail matters even after the marks run out) — they just can't
+ * pull `remaining` below zero. Only 'finalized' records count toward the
+ * existing balance (see getTermScore), matching how every other score in
+ * this file is computed.
+ */
+async function capDeductionToRemaining(studentId, termId, requestedDeduction) {
+  const { remaining } = await getTermScore(studentId, termId);
+  if (remaining <= 0) return 0;
+  return Math.min(requestedDeduction, remaining);
+}
+
+/**
+ * Checked right after a deduction is applied (create/approve/class-wide),
+ * so whoever just recorded it is told in that same response — rather than
+ * having to separately open the student's conduct report to notice their
+ * termly marks have run out. Distinct from the atRisk (<50%) early
+ * warning: this is specifically "there is nothing left to deduct this
+ * term", the point at which further incidents can only be logged for the
+ * paper trail (see capDeductionToRemaining) and the case is really a
+ * staff decision (deliberation/dismissal) rather than another deduction.
+ */
+async function isTermExceeded(studentId, termId) {
+  const { remaining } = await getTermScore(studentId, termId);
+  return remaining <= 0;
+}
+
+/**
+ * Every student in a school who has used up all of a given term's 40
+ * marks (deducted >= MARKS_PER_TERM, i.e. remaining <= 0) — the school-wide
+ * "needs deliberation" list the dashboard cards are built from, as opposed
+ * to getClassScores/getTermScore which need a specific class or student
+ * already picked. Grouped straight in SQL rather than looping every
+ * student in the school through getTermScore, since a school-wide scan
+ * only needs the ones that actually crossed the line.
+ */
+async function getExceededStudentIds(schoolId, termId) {
+  const rows = await MisconductRecord.findAll({
+    where: { schoolId, termId, status: "finalized" },
+    attributes: ["studentId", [sequelize.fn("SUM", sequelize.col("marks_deducted")), "deducted"]],
+    group: ["studentId"],
+    having: sequelize.where(sequelize.fn("SUM", sequelize.col("marks_deducted")), { [Op.gte]: MARKS_PER_TERM }),
+    raw: true,
+  });
+  return rows.map((r) => ({ studentId: r.studentId, deducted: Number(r.deducted) }));
+}
+
 module.exports = {
   MARKS_PER_TERM,
   MARKS_PER_YEAR,
@@ -145,4 +196,7 @@ module.exports = {
   getClassScores,
   getYearlyReport,
   getClassYearlyReport,
+  capDeductionToRemaining,
+  isTermExceeded,
+  getExceededStudentIds,
 };

@@ -10,12 +10,15 @@ const {
   User,
   TeacherModuleAssignment,
   Term,
+  AcademicYear,
   Discussion,
   DiscussionMessage,
+  Deliberation,
   sequelize,
 } = require("../models");
 const ApiError = require("../utils/ApiError");
 const { EVIDENCE_DIR } = require("../middleware/upload");
+const conductScoreService = require("../services/conductScoreService");
 
 const CAN_FINALIZE = ["dean_of_discipline", "disciplinary_officer"];
 
@@ -127,6 +130,24 @@ async function assertTermOpen(termId, academicYearId) {
 }
 
 /**
+ * Reporting/recording a mistake is only ever meant to happen against
+ * "right now" — the academic year the school is currently in. Older
+ * years stick around in the picker purely so their existing history can
+ * still be browsed (Records, ClassReport, Dashboard), but nobody should
+ * be able to raise a brand-new report or record against a year that
+ * isn't the current one.
+ */
+async function assertCurrentAcademicYear(academicYearId) {
+  const year = await AcademicYear.findByPk(academicYearId);
+  if (!year) throw ApiError.notFound("Academic year not found");
+  if (!year.isCurrent) {
+    throw ApiError.conflict(
+      `${year.name} isn't the current academic year — reports and records can only be created for the current year.`
+    );
+  }
+}
+
+/**
  * A student can't be sent home again while they're still serving an
  * existing send-home period — find any other finalized record for this
  * student whose [sentHomeFrom, sentHomeTo] range covers today.
@@ -152,6 +173,32 @@ async function assertNoActiveSendHome(studentId, excludeRecordId) {
     throw ApiError.conflict(
       `This student is already sent home (${label}) until ${active.sentHomeTo} — they can't be sent home again until that period ends.`
     );
+  }
+}
+
+/**
+ * A student the discipline office has already dismissed can't have a new
+ * incident recorded against them — either at all (dismissed_permanently)
+ * or for the specific term they were dismissed from (dismissed_term).
+ * Mirrors findActiveSendHome/assertNoActiveSendHome just above: one
+ * lookup helper, one throwing wrapper, reused by every record-creation
+ * path (single report, single record, and — filtered rather than thrown
+ * — the class-wide bulk path).
+ */
+async function findDismissal(studentId, termId) {
+  return Deliberation.findOne({
+    where: {
+      studentId,
+      [Op.or]: [{ decision: "dismissed_permanently" }, { decision: "dismissed_term", termId }],
+    },
+  });
+}
+
+async function assertNotDismissed(studentId, termId) {
+  const dismissal = await findDismissal(studentId, termId);
+  if (dismissal) {
+    const label = dismissal.decision === "dismissed_permanently" ? "dismissed permanently" : "dismissed for this term";
+    throw ApiError.conflict(`This student has been ${label} — no new incident can be recorded against them.`);
   }
 }
 
@@ -185,11 +232,31 @@ async function createReport(req, res, next) {
     if (misconductTypeId) {
       const type = await MisconductType.findByPk(misconductTypeId);
       if (!type) return next(ApiError.notFound("Misconduct type not found"));
+      // A Disciplinary Officer can already record every other incident type
+      // directly (see createRecord) — the report pathway exists for them
+      // only so a weekend/send-home incident can reach the Dean of
+      // Discipline for review. Anything else submitted here from that role
+      // would just be routing around their own "New record" tool.
+      if (req.user.sbmsRole === "disciplinary_officer" && !type.requiresSendHome) {
+        return next(
+          ApiError.forbidden(
+            "Disciplinary Officers report only incidents that require sending a student home for the weekend — record any other incident directly instead."
+          )
+        );
+      }
     }
+    await assertCurrentAcademicYear(academicYearId);
     await assertTermOpen(termId, academicYearId);
 
     const { student, klass } = await loadStudentContext(studentId);
     if (student.schoolId !== req.schoolId) return next(ApiError.forbidden());
+
+    // A student already serving a weekend/send-home period is, for SBMS
+    // purposes, not currently at school — no new mistake can be reported
+    // against them until that period ends, whether or not this particular
+    // incident would itself send them home.
+    await assertNoActiveSendHome(studentId);
+    await assertNotDismissed(studentId, termId);
 
     if (req.user.sbmsRole === "reporter") {
       await assertTeacherTeachesClass(req.user.id, klass.id, academicYearId);
@@ -245,6 +312,7 @@ async function createRecord(req, res, next) {
     if (!misconductTypeId && !customTitle) {
       return next(ApiError.badRequest("Pick a misconduct type or enter a custom title", "misconductTypeId"));
     }
+    await assertCurrentAcademicYear(academicYearId);
     await assertTermOpen(termId, academicYearId);
 
     let type = null;
@@ -264,9 +332,24 @@ async function createRecord(req, res, next) {
     if (!deduction || deduction <= 0) {
       return next(ApiError.badRequest("Marks deducted must be a positive number", "marksDeducted"));
     }
+    if (deduction > conductScoreService.MARKS_PER_TERM) {
+      return next(
+        ApiError.badRequest(
+          `Marks deducted can't exceed ${conductScoreService.MARKS_PER_TERM} — a term's total conduct marks`,
+          "marksDeducted"
+        )
+      );
+    }
 
     const { student, klass } = await loadStudentContext(studentId);
     if (student.schoolId !== req.schoolId) return next(ApiError.forbidden());
+
+    // Same rule as createReport: a student already serving a weekend/
+    // send-home period can't have a new mistake recorded against them
+    // until that period ends, regardless of whether this incident itself
+    // sends them home again.
+    await assertNoActiveSendHome(studentId);
+    await assertNotDismissed(studentId, termId);
 
     const sendHome = resolveSendHomeRange(type, sentHomeFrom, sentHomeTo);
 
@@ -283,7 +366,11 @@ async function createRecord(req, res, next) {
       );
     }
 
-    if (sendHome.sentHomeFrom) await assertNoActiveSendHome(studentId);
+    // Never let a single record push the term's remaining marks below
+    // zero — cap what's actually deducted to whatever's left, even
+    // though the incident itself still gets recorded at its full
+    // configured value for the history/paper trail.
+    const appliedDeduction = await conductScoreService.capDeductionToRemaining(studentId, termId, deduction);
 
     const record = await MisconductRecord.create({
       schoolId: req.schoolId,
@@ -294,7 +381,7 @@ async function createRecord(req, res, next) {
       misconductTypeId: misconductTypeId || null,
       customTitle: customTitle || null,
       description,
-      marksDeducted: deduction,
+      marksDeducted: appliedDeduction,
       status: "finalized",
       sentHomeFrom: sendHome.sentHomeFrom,
       sentHomeTo: sendHome.sentHomeTo,
@@ -310,7 +397,18 @@ async function createRecord(req, res, next) {
 
     await saveEvidenceFiles(req.files, record, req.user.id);
     await record.reload({ include: [EVIDENCE_INCLUDE] });
-    res.status(201).json(record);
+
+    // Tell whoever just recorded this immediately if it used up (or had
+    // already used up) the student's conduct marks for the term, so it
+    // doesn't quietly go unnoticed until someone later opens the conduct
+    // report — this is the point where the case is a staff decision
+    // (deliberation/dismissal), not just another deduction.
+    const payload = record.toJSON();
+    if (await conductScoreService.isTermExceeded(student.id, termId)) {
+      payload.marksExceeded = true;
+      payload.marksExceededMessage = `${student.firstName} ${student.lastName} has used up all conduct marks allowed for this term — refer this student for deliberation.`;
+    }
+    res.status(201).json(payload);
   } catch (err) {
     next(err);
   }
@@ -367,6 +465,7 @@ async function bulkClassRecord(req, res, next) {
     if (!misconductTypeId && !customTitle) {
       return next(ApiError.badRequest("Pick a misconduct type or enter a custom title", "misconductTypeId"));
     }
+    await assertCurrentAcademicYear(academicYearId);
     await assertTermOpen(termId, academicYearId);
 
     let type = null;
@@ -387,20 +486,53 @@ async function bulkClassRecord(req, res, next) {
     if (!deduction || deduction <= 0) {
       return next(ApiError.badRequest("Marks deducted must be a positive number", "marksDeducted"));
     }
+    if (deduction > conductScoreService.MARKS_PER_TERM) {
+      return next(
+        ApiError.badRequest(
+          `Marks deducted can't exceed ${conductScoreService.MARKS_PER_TERM} — a term's total conduct marks`,
+          "marksDeducted"
+        )
+      );
+    }
 
     const klass = await Class.findByPk(classId);
     if (!klass || klass.schoolId !== req.schoolId) return next(ApiError.notFound("Class not found"));
 
     const excludeSet = new Set((Array.isArray(excludeStudentIds) ? excludeStudentIds : []).map(Number));
     const students = await Student.findAll({ where: { classId: klass.id, status: "active" } });
-    const targets = students.filter((s) => !excludeSet.has(s.id));
+    const candidates = students.filter((s) => !excludeSet.has(s.id));
+
+    // Same rule as createRecord/createReport: a student already serving a
+    // weekend/send-home period sits out of a class-wide action too — auto-
+    // skipped here (rather than failing the whole batch) since this is a
+    // "whole class except a few" tool by design.
+    const sendHomeChecks = await Promise.all(candidates.map((s) => findActiveSendHome(s.id)));
+    const afterSendHome = candidates.filter((_, i) => !sendHomeChecks[i]);
+    const skippedSendHome = candidates.filter((_, i) => sendHomeChecks[i]);
+
+    // Same again for dismissed students — permanently dismissed, or
+    // dismissed for this specific term — auto-skipped rather than
+    // failing the whole batch, same reasoning as send-home above.
+    const dismissalChecks = await Promise.all(afterSendHome.map((s) => findDismissal(s.id, termId)));
+    const targets = afterSendHome.filter((_, i) => !dismissalChecks[i]);
+    const skippedDismissed = afterSendHome.filter((_, i) => dismissalChecks[i]);
+
     if (targets.length === 0) {
-      return next(ApiError.badRequest("No students to apply this to — check the class roster or your exclusions"));
+      return next(ApiError.badRequest("No students to apply this to — check the class roster, your exclusions, or active send-home/dismissal periods"));
     }
 
+    // Never let this push any one student's termly remaining marks below
+    // zero — each student's deduction is capped independently to whatever
+    // they actually have left this term.
+    // Collected alongside record creation so the response can tell the
+    // Dean of Discipline exactly which students in the batch have now
+    // used up their termly conduct marks — same signal as the single-
+    // record path, just gathered across the whole class in one pass.
+    const exceededStudents = [];
     const records = await Promise.all(
-      targets.map((student) =>
-        MisconductRecord.create({
+      targets.map(async (student) => {
+        const appliedDeduction = await conductScoreService.capDeductionToRemaining(student.id, termId, deduction);
+        const record = await MisconductRecord.create({
           schoolId: req.schoolId,
           studentId: student.id,
           classId: klass.id,
@@ -409,15 +541,19 @@ async function bulkClassRecord(req, res, next) {
           misconductTypeId: misconductTypeId || null,
           customTitle: customTitle || null,
           description,
-          marksDeducted: deduction,
+          marksDeducted: appliedDeduction,
           status: "finalized",
           reportedByUserId: req.user.id,
           reportedByRole: req.user.sbmsRole,
           finalizedByUserId: req.user.id,
           finalizedByRole: req.user.sbmsRole,
           finalizedAt: new Date(),
-        })
-      )
+        });
+        if (await conductScoreService.isTermExceeded(student.id, termId)) {
+          exceededStudents.push({ id: student.id, firstName: student.firstName, lastName: student.lastName });
+        }
+        return record;
+      })
     );
 
     res.status(201).json({
@@ -426,6 +562,9 @@ async function bulkClassRecord(req, res, next) {
       marksDeducted: deduction,
       count: records.length,
       excluded: excludeSet.size,
+      skippedSendHome: skippedSendHome.map((s) => ({ id: s.id, firstName: s.firstName, lastName: s.lastName })),
+      skippedDismissed: skippedDismissed.map((s) => ({ id: s.id, firstName: s.firstName, lastName: s.lastName })),
+      exceededStudents,
       records,
     });
   } catch (err) {
@@ -456,6 +595,12 @@ async function approveOneRecord(record, req, { sentHomeFrom, sentHomeTo, manualM
     // catalog entry — the only case where a number still has to be
     // supplied by hand.
     deduction = manualMarksDeducted;
+    if (deduction > conductScoreService.MARKS_PER_TERM) {
+      throw ApiError.badRequest(
+        `Marks deducted can't exceed ${conductScoreService.MARKS_PER_TERM} — a term's total conduct marks`,
+        "marksDeducted"
+      );
+    }
   } else {
     throw ApiError.badRequest("This report has no incident type on file — reject it and ask for it to be resubmitted.");
   }
@@ -475,8 +620,12 @@ async function approveOneRecord(record, req, { sentHomeFrom, sentHomeTo, manualM
 
   if (sendHome.sentHomeFrom) await assertNoActiveSendHome(record.studentId, record.id);
 
+  // Same termly floor as createRecord/bulkClassRecord: approving a report
+  // still records the incident, but can't take remaining marks below zero.
+  const appliedDeduction = await conductScoreService.capDeductionToRemaining(record.studentId, record.termId, deduction);
+
   await record.update({
-    marksDeducted: deduction,
+    marksDeducted: appliedDeduction,
     sentHomeFrom: sendHome.sentHomeFrom,
     sentHomeTo: sendHome.sentHomeTo,
     status: "finalized",
@@ -514,7 +663,12 @@ async function approve(req, res, next) {
       sentHomeTo: req.body.sentHomeTo,
       manualMarksDeducted: req.body.marksDeducted,
     });
-    res.json(record);
+
+    const payload = record.toJSON();
+    if (await conductScoreService.isTermExceeded(record.studentId, record.termId)) {
+      payload.marksExceeded = true;
+    }
+    res.json(payload);
   } catch (err) {
     next(err);
   }
@@ -594,17 +748,22 @@ async function bulkApprove(req, res, next) {
 
     const approved = [];
     const failed = [];
+    const exceededStudents = [];
     for (const id of ids) {
       try {
         const record = await MisconductRecord.findByPk(id);
         if (!record || record.schoolId !== req.schoolId) throw ApiError.notFound("Report not found");
         await approveOneRecord(record, req);
         approved.push(id);
+        if (await conductScoreService.isTermExceeded(record.studentId, record.termId)) {
+          const student = await Student.findByPk(record.studentId);
+          exceededStudents.push({ id: record.studentId, firstName: student?.firstName, lastName: student?.lastName });
+        }
       } catch (err) {
         failed.push({ id, error: err.message || "Could not approve" });
       }
     }
-    res.json({ approved, failed });
+    res.json({ approved, failed, exceededStudents });
   } catch (err) {
     next(err);
   }

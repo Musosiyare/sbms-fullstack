@@ -15,6 +15,7 @@ const MisconductRecord = require("./MisconductRecord");
 const MisconductEvidence = require("./MisconductEvidence");
 const Discussion = require("./Discussion");
 const DiscussionMessage = require("./DiscussionMessage");
+const Deliberation = require("./Deliberation");
 
 // --- MisconductType -> School ---
 School.hasMany(MisconductType, { foreignKey: "schoolId" });
@@ -60,6 +61,24 @@ Discussion.hasMany(DiscussionMessage, { foreignKey: "discussionId", as: "message
 DiscussionMessage.belongsTo(Discussion, { foreignKey: "discussionId" });
 DiscussionMessage.belongsTo(User, { as: "author", foreignKey: "authorUserId" });
 
+// --- Deliberation -> everything it references ---
+School.hasMany(Deliberation, { foreignKey: "schoolId" });
+Deliberation.belongsTo(School, { foreignKey: "schoolId" });
+
+Student.hasMany(Deliberation, { foreignKey: "studentId" });
+Deliberation.belongsTo(Student, { foreignKey: "studentId" });
+
+Class.hasMany(Deliberation, { foreignKey: "classId" });
+Deliberation.belongsTo(Class, { foreignKey: "classId" });
+
+AcademicYear.hasMany(Deliberation, { foreignKey: "academicYearId" });
+Deliberation.belongsTo(AcademicYear, { foreignKey: "academicYearId" });
+
+Term.hasMany(Deliberation, { foreignKey: "termId" });
+Deliberation.belongsTo(Term, { foreignKey: "termId" });
+
+Deliberation.belongsTo(User, { as: "decidedBy", foreignKey: "decidedByUserId" });
+
 // --- TeacherModuleAssignment -> Class / User ---
 Class.hasMany(TeacherModuleAssignment, { foreignKey: "classId" });
 TeacherModuleAssignment.belongsTo(Class, { foreignKey: "classId" });
@@ -81,4 +100,5 @@ module.exports = {
   MisconductEvidence,
   Discussion,
   DiscussionMessage,
+  Deliberation,
 };

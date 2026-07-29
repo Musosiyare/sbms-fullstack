@@ -1,6 +1,7 @@
 const { MisconductType, School } = require("../models");
 const { Op } = require("sequelize");
 const ApiError = require("../utils/ApiError");
+const { MARKS_PER_TERM } = require("../services/conductScoreService");
 
 /** Global templates (schoolId null) plus this school's own types. */
 async function list(req, res, next) {
@@ -23,6 +24,17 @@ async function create(req, res, next) {
   try {
     const { title, description, defaultDeduction, severity, requiresSendHome, sendHomeDays } = req.body;
     if (!title) return next(ApiError.badRequest("Title is required", "title"));
+
+    // A single incident type can't be configured to outweigh an entire
+    // term's conduct marks — that would let one incident alone decide a
+    // student's termly outcome, which is exactly the kind of call the
+    // yearly-combined decision (see conductScoreService) is meant to make
+    // instead of any one record.
+    if (defaultDeduction !== undefined && (Number(defaultDeduction) <= 0 || Number(defaultDeduction) > MARKS_PER_TERM)) {
+      return next(
+        ApiError.badRequest(`Default deduction must be between 1 and ${MARKS_PER_TERM} (a term's total conduct marks)`, "defaultDeduction")
+      );
+    }
 
     const sendHome = Boolean(requiresSendHome);
     if (sendHome && (!sendHomeDays || Number(sendHomeDays) <= 0)) {
@@ -53,6 +65,12 @@ async function update(req, res, next) {
     }
 
     const { title, description, defaultDeduction, severity, isActive, requiresSendHome, sendHomeDays } = req.body;
+
+    if (defaultDeduction !== undefined && (Number(defaultDeduction) <= 0 || Number(defaultDeduction) > MARKS_PER_TERM)) {
+      return next(
+        ApiError.badRequest(`Default deduction must be between 1 and ${MARKS_PER_TERM} (a term's total conduct marks)`, "defaultDeduction")
+      );
+    }
 
     const nextRequiresSendHome = requiresSendHome !== undefined ? Boolean(requiresSendHome) : type.requiresSendHome;
     const nextSendHomeDays = requiresSendHome !== undefined ? sendHomeDays : (sendHomeDays !== undefined ? sendHomeDays : type.sendHomeDays);

@@ -12,6 +12,7 @@ const misconductTypeRoutes = require("./src/routes/misconductTypeRoutes");
 const misconductRecordRoutes = require("./src/routes/misconductRecordRoutes");
 const reportRoutes = require("./src/routes/reportRoutes");
 const discussionRoutes = require("./src/routes/discussionRoutes");
+const deliberationRoutes = require("./src/routes/deliberationRoutes");
 const errorHandler = require("./src/middleware/errorHandler");
 
 const app = express();
@@ -35,6 +36,7 @@ app.use("/api/misconduct-types", misconductTypeRoutes);
 app.use("/api/misconduct-records", misconductRecordRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/discussions", discussionRoutes);
+app.use("/api/deliberations", deliberationRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: { code: "NOT_FOUND", message: "Route not found" } });

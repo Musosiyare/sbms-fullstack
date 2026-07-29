@@ -17,7 +17,9 @@ export const getTerms = (academicYearId) =>
   api.get("/reference/terms", { params: { academicYearId } }).then((r) => r.data);
 export const getClasses = (academicYearId) =>
   api.get("/reference/classes", { params: { academicYearId } }).then((r) => r.data);
-export const getStudents = (classId) => api.get("/reference/students", { params: { classId } }).then((r) => r.data);
+export const getStudents = (classId, termId) =>
+  api.get("/reference/students", { params: { classId, termId } }).then((r) => r.data);
+export const searchStudents = (q) => api.get("/reference/students/search", { params: { q } }).then((r) => r.data);
 export const getDisciplineStaff = () => api.get("/reference/discipline-staff").then((r) => r.data);
 
 export const getMisconductTypes = () => api.get("/misconduct-types").then((r) => r.data);
@@ -65,6 +67,12 @@ export const getClassYearlyConductReport = (classId, params) =>
   api.get(`/reports/class/${classId}/yearly-conduct`, { params }).then((r) => r.data);
 export const getWeekendPermission = (recordId) =>
   api.get(`/reports/record/${recordId}/weekend-permission`).then((r) => r.data);
+export const getDismissedStudentsReport = (params) =>
+  api.get("/reports/dismissed-students", { params }).then((r) => r.data);
+
+export const getExceededStudents = (params) => api.get("/deliberations/exceeded", { params }).then((r) => r.data);
+export const submitDeliberation = (payload) => api.post("/deliberations", payload).then((r) => r.data);
+export const undoDeliberation = (id) => api.delete(`/deliberations/${id}`).then((r) => r.data);
 
 export const openDiscussion = (payload) => api.post("/discussions", payload).then((r) => r.data);
 export const closeDiscussion = (id, note) => api.patch(`/discussions/${id}/close`, { note }).then((r) => r.data);

@@ -126,6 +126,11 @@ export default function MisconductTypes() {
   );
 }
 
+// Mirrors MARKS_PER_TERM in the backend's conductScoreService — a single
+// incident type can't be configured to outweigh an entire term's conduct
+// marks, since that would let one incident alone decide a termly outcome.
+const MAX_TERM_MARKS = 40;
+
 function TypeModal({ initial, onClose, onDone }) {
   const isNew = !initial.id;
   const [title, setTitle] = useState(initial.title || "");
@@ -148,6 +153,13 @@ function TypeModal({ initial, onClose, onDone }) {
       setError("Enter how many days the student is sent home for.");
       return;
     }
+    if (!defaultDeduction || Number(defaultDeduction) <= 0) {
+      setError("Default deduction must be a positive number.");
+      return;
+    }
+    // Whether this exceeds the term's total conduct marks is checked and
+    // enforced by the backend (not here, and not via the input's HTML
+    // attributes) — its error message is shown below if it rejects it.
     setSubmitting(true);
     try {
       const payload = {
@@ -179,8 +191,12 @@ function TypeModal({ initial, onClose, onDone }) {
           <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
         </Field>
         <div className="grid grid-cols-2 gap-4">
-          <Field label="Default deduction">
-            <Input type="number" min="1" value={defaultDeduction} onChange={(e) => setDefaultDeduction(e.target.value)} />
+          <Field label={`Default deduction (max ${MAX_TERM_MARKS})`}>
+            <Input
+              type="number"
+              value={defaultDeduction}
+              onChange={(e) => setDefaultDeduction(e.target.value)}
+            />
           </Field>
           <Field label="Severity">
             <Select value={severity} onChange={(e) => setSeverity(e.target.value)}>

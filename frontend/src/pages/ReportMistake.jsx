@@ -1,14 +1,23 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { AlertTriangle } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
 import { Field, Select, Textarea } from "../components/ui/FormField";
-import { ErrorText, TermLockBadge, AllTermsLockedNotice } from "../components/ui/Alerts";
+import { ErrorText, TermLockBadge, AllTermsLockedNotice, NotCurrentYearNotice } from "../components/ui/Alerts";
 import EvidenceUpload, { EvidenceFieldLabel } from "../components/ui/EvidenceUpload";
 import { useScopePicker } from "../hooks/useScopePicker";
-import { createReport, getMisconductTypes } from "../api/sbms";
+import { createReport, getMisconductTypes, listRecords } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
+
+function toDateOnly(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function fmtDate(d) {
+  return d ? new Date(d).toLocaleDateString() : "";
+}
 
 export default function ReportMistake() {
   const { user } = useAuth();
@@ -19,16 +28,53 @@ export default function ReportMistake() {
   const [files, setFiles] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [studentWarning, setStudentWarning] = useState(null); // { title, until } | null
+  const [checkingStudent, setCheckingStudent] = useState(false);
 
   useEffect(() => {
     getMisconductTypes().then(setTypes);
   }, []);
+
+  // Same check as the discipline-side "New record" form: a student
+  // already serving a weekend/send-home period can't have a new mistake
+  // reported against them, so this is surfaced as soon as they're picked
+  // rather than after filling out the whole form.
+  useEffect(() => {
+    if (!scope.studentId) {
+      setStudentWarning(null);
+      return;
+    }
+    setStudentWarning(null);
+    setCheckingStudent(true);
+    listRecords({ studentId: scope.studentId, status: "finalized" })
+      .then((records) => {
+        const today = toDateOnly(new Date());
+        const active = records.find(
+          (r) => r.sentHomeFrom && r.sentHomeTo && r.sentHomeFrom <= today && r.sentHomeTo >= today
+        );
+        if (active) {
+          setStudentWarning({
+            title: capitalizeFirst(active.MisconductType?.title) || active.customTitle || "an earlier incident",
+            until: active.sentHomeTo,
+          });
+        }
+      })
+      .finally(() => setCheckingStudent(false));
+  }, [scope.studentId]);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
     if (!scope.studentId || !scope.termId || !scope.academicYearId) {
       setError("Pick the student, class, and term first.");
+      return;
+    }
+    if (!scope.isCurrentAcademicYear) {
+      setError("Reports can only be raised for the current academic year — switch back to the current year.");
+      return;
+    }
+    if (studentWarning) {
+      setError("This student is already sent home — pick a different student.");
       return;
     }
     if (!misconductTypeId) {
@@ -63,14 +109,31 @@ export default function ReportMistake() {
   }
 
   const canFinalizeDirectly = ["dean_of_discipline", "disciplinary_officer"].includes(user.sbmsRole);
+  const isOfficer = user.sbmsRole === "disciplinary_officer";
+  // A Disciplinary Officer can record everything else directly from
+  // Records -> New record — the only reason they'd land on this report
+  // form at all is a weekend/send-home incident, which they're not
+  // allowed to finalize themselves. So the catalog here narrows down to
+  // exactly that subset for them; nothing else would make sense to pick.
+  const visibleTypes = types ? (isOfficer ? types.filter((t) => t.requiresSendHome) : types) : types;
 
   return (
     <Card>
       {canFinalizeDirectly && (
         <p className="text-sm text-slate-500 mb-4 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5">
-          As {user.sbmsRole === "dean_of_discipline" ? "Dean of Discipline" : "a Disciplinary Officer"}, you can also
-          record a mistake directly with marks deducted — use "New record" on the Records page for that. This form
-          just raises a report for review.
+          {isOfficer ? (
+            <>
+              As a Disciplinary Officer, you can record most incidents directly — use "New record" on the
+              Records page for that. Incidents that send a student home for the weekend are the exception:
+              you're not allowed to finalize those yourself, so this form raises a report instead, for the
+              Dean of Discipline to review and finalize.
+            </>
+          ) : (
+            <>
+              As Dean of Discipline, you can also record a mistake directly with marks deducted — use "New
+              record" on the Records page for that. This form just raises a report for review.
+            </>
+          )}
         </p>
       )}
 
@@ -87,7 +150,11 @@ export default function ReportMistake() {
             </Select>
           </Field>
           <Field label="Term">
-            <Select value={scope.termId} onChange={(e) => scope.setTermId(e.target.value)} disabled={!scope.terms.length}>
+            <Select
+              value={scope.termId}
+              onChange={(e) => scope.setTermId(e.target.value)}
+              disabled={!scope.terms.length || !scope.isCurrentAcademicYear}
+            >
               <option value="">Select...</option>
               {scope.terms.map((t) => (
                 <option key={t.id} value={t.id} disabled={t.isLocked}>
@@ -101,10 +168,19 @@ export default function ReportMistake() {
         </div>
 
         {scope.terms.length > 0 && scope.terms.every((t) => t.isLocked) && <AllTermsLockedNotice />}
+        {!scope.isCurrentAcademicYear && (
+          <NotCurrentYearNotice
+            yearName={scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId))?.name}
+          />
+        )}
 
         <div className="grid sm:grid-cols-2 gap-4">
           <Field label="Class">
-            <Select value={scope.classId} onChange={(e) => scope.setClassId(e.target.value)} disabled={!scope.classes.length}>
+            <Select
+              value={scope.classId}
+              onChange={(e) => scope.setClassId(e.target.value)}
+              disabled={!scope.classes.length || !scope.isCurrentAcademicYear}
+            >
               <option value="">Select...</option>
               {scope.classes.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -114,7 +190,11 @@ export default function ReportMistake() {
             </Select>
           </Field>
           <Field label="Student">
-            <Select value={scope.studentId} onChange={(e) => scope.setStudentId(e.target.value)} disabled={!scope.students.length}>
+            <Select
+              value={scope.studentId}
+              onChange={(e) => scope.setStudentId(e.target.value)}
+              disabled={!scope.students.length || !scope.isCurrentAcademicYear}
+            >
               <option value="">Select...</option>
               {scope.students.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -125,18 +205,49 @@ export default function ReportMistake() {
           </Field>
         </div>
 
+        {checkingStudent && <p className="text-xs text-slate-400">Checking this student's status...</p>}
+
+        {studentWarning ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3.5 text-sm text-red-700 flex items-start gap-2.5">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">Already sent home</p>
+              <p className="mt-0.5 text-red-600/90">
+                This student is serving a weekend for {studentWarning.title} until {fmtDate(studentWarning.until)} —
+                a new report can't be raised until it ends. Pick a different student to continue.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
         <Field label="Incident">
-          <Select value={misconductTypeId} onChange={(e) => setMisconductTypeId(e.target.value)} disabled={!types}>
+          <Select
+            value={misconductTypeId}
+            onChange={(e) => setMisconductTypeId(e.target.value)}
+            disabled={!types || !scope.isCurrentAcademicYear}
+          >
             <option value="">{types ? "Select..." : "Loading..."}</option>
-            {types?.map((t) => (
+            {visibleTypes?.map((t) => (
               <option key={t.id} value={t.id}>
                 {capitalizeFirst(t.title)} (-{t.defaultDeduction})
               </option>
             ))}
           </Select>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-brand-600">
             The list and deduction marks are set by the Dean of Discipline.
           </p>
+          {isOfficer && (
+            <p className="text-xs text-brand-600">
+              Only incidents that require sending a student home for the weekend are available here — every
+              other incident type is yours to record directly from Records → New record.
+            </p>
+          )}
+          {isOfficer && types && visibleTypes.length === 0 && (
+            <p className="text-xs text-amber-600">
+              No incident type in the catalog currently requires a weekend send-home, so there's nothing to
+              report here right now.
+            </p>
+          )}
           {types?.find((t) => String(t.id) === misconductTypeId)?.requiresSendHome && (
             <p className="text-xs text-amber-600">
               This incident sends the student home — the discipline office will set the dates when they review it.
@@ -150,23 +261,30 @@ export default function ReportMistake() {
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Anything else worth adding..."
+            disabled={!scope.isCurrentAcademicYear}
           />
         </Field>
 
         <Field label={<EvidenceFieldLabel />}>
           <EvidenceUpload
             files={files}
-            disabled={submitting}
+            disabled={submitting || !scope.isCurrentAcademicYear}
             onChange={(next, uploadError) => {
               setFiles(next);
               if (uploadError) setError(uploadError);
             }}
           />
         </Field>
+          </>
+        )}
 
         <ErrorText>{error}</ErrorText>
 
-        <Button type="submit" disabled={submitting} className="self-start">
+        <Button
+          type="submit"
+          disabled={submitting || !!studentWarning || !scope.isCurrentAcademicYear}
+          className="self-start"
+        >
           {submitting ? "Submitting..." : "Submit report"}
         </Button>
       </form>

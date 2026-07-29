@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useConfirm } from "./ui/ConfirmProvider";
 import NotificationBell from "./NotificationBell";
+import StudentSearch from "./StudentSearch";
+import HeaderClock from "./HeaderClock";
+import YearlyConductReportModal from "./YearlyConductReportModal";
 import {
   ShieldAlert,
   LayoutDashboard,
@@ -13,11 +16,16 @@ import {
   ListChecks,
   UserCog,
   UserRound,
+  UserX,
   LogOut,
   Menu,
   X,
   MessageCircle,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
+
+const SIDEBAR_COLLAPSED_KEY = "sbms:sidebarCollapsed";
 
 const CAN_SEE_QUEUE = ["dean_of_discipline", "disciplinary_officer", "manager"];
 
@@ -36,6 +44,7 @@ const NAV = {
     { to: "/discussions", label: "Discussions", icon: MessageCircle },
     { to: "/class-report", label: "Class Report", icon: BarChart3 },
     { to: "/yearly-report", label: "Yearly Report", icon: GraduationCap },
+    { to: "/dismissed-students", label: "Dismissed Students", icon: UserX },
     { to: "/staff-roles", label: "Staff Roles", icon: UserCog },
   ],
   dean_of_discipline: [
@@ -44,6 +53,7 @@ const NAV = {
     { to: "/discussions", label: "Discussions", icon: MessageCircle },
     { to: "/class-report", label: "Class Report", icon: BarChart3 },
     { to: "/yearly-report", label: "Yearly Report", icon: GraduationCap },
+    { to: "/dismissed-students", label: "Dismissed Students", icon: UserX },
     { to: "/misconduct-types", label: "Misconduct Types", icon: ListChecks },
     { to: "/staff-roles", label: "Staff Roles", icon: UserCog },
   ],
@@ -54,6 +64,7 @@ const NAV = {
     { to: "/discussions", label: "Discussions", icon: MessageCircle },
     { to: "/class-report", label: "Class Report", icon: BarChart3 },
     { to: "/yearly-report", label: "Yearly Report", icon: GraduationCap },
+    { to: "/dismissed-students", label: "Dismissed Students", icon: UserX },
     { to: "/staff-roles", label: "Staff Roles", icon: UserCog },
   ],
   reporter: [
@@ -70,6 +81,7 @@ const PAGE_META = {
   "/discussions": { title: "Discussions", subtitle: "Case-conference threads on students' mistakes." },
   "/class-report": { title: "Class Report", subtitle: "Termly conduct scores, per student." },
   "/yearly-report": { title: "Yearly Report", subtitle: "All three terms combined — promotion or dismissal, per student." },
+  "/dismissed-students": { title: "Dismissed Students", subtitle: "Every dismissed student — permanently, or for a term." },
   "/misconduct-types": { title: "Misconduct Types", subtitle: "The catalog of offenses and their default deductions." },
   "/staff-roles": { title: "Staff Roles", subtitle: "Assign Dean of Discipline and Disciplinary Officer access." },
   "/profile": { title: "Profile", subtitle: "Your account and password." },
@@ -81,6 +93,22 @@ export default function Layout({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [searchPick, setSearchPick] = useState(null); // { studentId, academicYearId }
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+    } catch {
+      /* localStorage unavailable — collapse state just won't persist across reloads */
+    }
+  }, [collapsed]);
 
   if (!user || location.pathname === "/") return children;
 
@@ -102,7 +130,7 @@ export default function Layout({ children }) {
     navigate("/login");
   }
 
-  const NavLinks = () => (
+  const NavLinks = ({ iconOnly = false }) => (
     <nav className="flex flex-col gap-1 px-3">
       {nav.map(({ to, label, icon: Icon }) => {
         const active = location.pathname === to;
@@ -110,13 +138,14 @@ export default function Layout({ children }) {
           <Link
             key={to}
             to={to}
+            title={iconOnly ? label : undefined}
             onClick={() => setMobileOpen(false)}
             className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-              active ? `${meta.tint} ${meta.text} border` : "text-slate-600 hover:bg-slate-100"
-            }`}
+              iconOnly ? "justify-center" : ""
+            } ${active ? `${meta.tint} ${meta.text} border` : "text-slate-600 hover:bg-slate-100"}`}
           >
-            <Icon size={17} />
-            {label}
+            <Icon size={17} className="shrink-0" />
+            {!iconOnly && label}
           </Link>
         );
       })}
@@ -126,45 +155,82 @@ export default function Layout({ children }) {
   return (
     <div className="min-h-screen flex">
       {/* Desktop sidebar */}
-      <aside className="hidden md:flex md:w-64 shrink-0 flex-col border-r border-slate-200 bg-white sticky top-0 h-screen">
-        <div className="flex items-center gap-2.5 px-5 py-5 border-b border-slate-100">
-          <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${meta.accent} text-white`}>
+      <aside
+        className={`hidden md:flex shrink-0 flex-col border-r border-slate-200 bg-white sticky top-0 h-screen transition-all duration-200 ${
+          collapsed ? "md:w-[72px]" : "md:w-64"
+        }`}
+      >
+        <div
+          className={`flex items-center border-b border-slate-100 py-5 ${
+            collapsed ? "justify-center px-3" : "gap-2.5 px-5"
+          }`}
+        >
+          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${meta.accent} text-white`}>
             <ShieldAlert size={18} />
           </div>
-          <div>
-            <p className="text-sm font-semibold text-slate-800 font-display">SBMS</p>
-            <p className="text-[11px] text-slate-400 -mt-0.5">Behavior Management</p>
-          </div>
+          {!collapsed && (
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-slate-800 font-display">SBMS</p>
+              <p className="text-[11px] text-slate-400 -mt-0.5">Behavior Management</p>
+            </div>
+          )}
         </div>
-        <div className="flex-1 py-4 overflow-y-auto">
-          <NavLinks />
+
+        <div className="flex-1 py-4 overflow-y-auto overflow-x-hidden">
+          <NavLinks iconOnly={collapsed} />
         </div>
-        <div className="border-t border-slate-100 p-4">
+
+        <button
+          onClick={() => setCollapsed((c) => !c)}
+          title={collapsed ? "Expand menu" : "Collapse menu"}
+          className={`flex items-center gap-2 border-t border-slate-100 px-3 py-3 text-xs font-medium text-slate-400 hover:bg-slate-50 hover:text-slate-600 ${
+            collapsed ? "justify-center" : ""
+          }`}
+        >
+          {collapsed ? <PanelLeftOpen size={16} /> : (
+            <>
+              <PanelLeftClose size={16} /> Collapse
+            </>
+          )}
+        </button>
+
+        <div className={`border-t border-slate-100 p-4 ${collapsed ? "px-2" : ""}`}>
           <Link
             to="/profile"
+            title={collapsed ? user.name : undefined}
             onClick={() => setMobileOpen(false)}
-            className="flex items-center gap-2.5 mb-3 rounded-lg -mx-1 px-1 py-1 hover:bg-slate-50"
+            className={`flex items-center mb-3 rounded-lg hover:bg-slate-50 ${
+              collapsed ? "justify-center py-1" : "gap-2.5 -mx-1 px-1 py-1"
+            }`}
           >
             <div className={`h-8 w-8 rounded-full ${meta.accent} text-white text-xs font-semibold flex items-center justify-center shrink-0`}>
               {user.name?.[0]?.toUpperCase() || "U"}
             </div>
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-slate-800 truncate">{user.name}</p>
-              <p className={`text-[11px] ${meta.text}`}>{meta.label}</p>
-            </div>
+            {!collapsed && (
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-slate-800 truncate">{user.name}</p>
+                <p className={`text-[11px] ${meta.text}`}>{meta.label}</p>
+              </div>
+            )}
           </Link>
           <Link
             to="/profile"
+            title={collapsed ? "Profile" : undefined}
             onClick={() => setMobileOpen(false)}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
+            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 ${
+              collapsed ? "justify-center px-0" : ""
+            }`}
           >
-            <UserRound size={15} /> Profile
+            <UserRound size={15} className="shrink-0" /> {!collapsed && "Profile"}
           </Link>
           <button
             onClick={handleLogout}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
+            title={collapsed ? "Log out" : undefined}
+            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 ${
+              collapsed ? "justify-center px-0" : ""
+            }`}
           >
-            <LogOut size={15} /> Log out
+            <LogOut size={15} className="shrink-0" /> {!collapsed && "Log out"}
           </button>
         </div>
       </aside>
@@ -209,18 +275,41 @@ export default function Layout({ children }) {
 
       {/* Main column */}
       <div className="flex-1 min-w-0">
-        <header className="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-slate-200 px-4 sm:px-6 py-4 flex items-center gap-3">
+        <header className="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-slate-200 px-4 sm:px-6 py-4 flex items-center gap-3 flex-wrap lg:flex-nowrap">
           <button onClick={() => setMobileOpen(true)} className="md:hidden text-slate-500 p-1">
             <Menu size={22} />
           </button>
-          <div className="min-w-0">
+          <button
+            onClick={() => setCollapsed((c) => !c)}
+            title={collapsed ? "Expand menu" : "Collapse menu"}
+            className="hidden md:flex text-slate-400 hover:text-slate-600 p-1"
+          >
+            {collapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
+          </button>
+          <div className="min-w-0 shrink-0">
             <h1 className="text-lg font-semibold text-slate-800 font-display truncate">{page.title}</h1>
-            {page.subtitle && <p className="text-sm text-slate-500 truncate">{page.subtitle}</p>}
+            {page.subtitle && <p className="text-sm text-slate-500 truncate hidden sm:block">{page.subtitle}</p>}
           </div>
-          {CAN_SEE_QUEUE.includes(user.sbmsRole) && <NotificationBell />}
+
+          <div className="order-3 w-full lg:order-none lg:w-auto lg:flex-1 lg:ml-6 lg:max-w-2xl">
+            <StudentSearch onSelect={(studentId, academicYearId) => setSearchPick({ studentId, academicYearId })} />
+          </div>
+
+          <div className="ml-auto flex items-center gap-3 shrink-0">
+            <HeaderClock />
+            {CAN_SEE_QUEUE.includes(user.sbmsRole) && <NotificationBell />}
+          </div>
         </header>
         <main className="p-4 sm:p-6 max-w-6xl mx-auto">{children}</main>
       </div>
+
+      {searchPick && (
+        <YearlyConductReportModal
+          studentId={searchPick.studentId}
+          academicYearId={searchPick.academicYearId}
+          onClose={() => setSearchPick(null)}
+        />
+      )}
     </div>
   );
 }

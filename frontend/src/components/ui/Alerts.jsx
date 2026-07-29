@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Lock, LockOpen } from "lucide-react";
+import { AlertCircle, CheckCircle2, Lock, LockOpen, CalendarClock } from "lucide-react";
 
 export function ErrorText({ children }) {
   if (!children) return null;
@@ -48,6 +48,28 @@ export function AllTermsLockedNotice() {
     <p className="flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
       <Lock size={15} className="shrink-0" /> Every term is locked in the reporting system right now — nothing can be
       reported or recorded until one is reopened.
+    </p>
+  );
+}
+
+/**
+ * Older academic years stay pickable in the Academic year/term pickers so
+ * their existing history can still be browsed, but certain actions —
+ * raising a new report/record, making a deliberation decision — only
+ * ever apply to whichever year is currently marked current. Shown next
+ * to the relevant picker when someone selects any other year, paired
+ * with disabling whatever action it guards so it's not just a cosmetic
+ * warning. `action` describes what's being blocked in a few words (e.g.
+ * "reports and records can only be created", "deliberation decisions can
+ * only be made"); defaults to the report/record wording since that's the
+ * most common caller.
+ */
+export function NotCurrentYearNotice({ yearName, action = "reports and records can only be created" }) {
+  return (
+    <p className="flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-700">
+      <CalendarClock size={15} className="shrink-0" />
+      {yearName ? `${yearName} isn't` : "This isn't"} the current academic year — {action} for the current year.
+      Switch back to the current year to continue.
     </p>
   );
 }

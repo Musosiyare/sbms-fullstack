@@ -1,4 +1,4 @@
-const { Discussion, DiscussionMessage, MisconductRecord, Student, MisconductType, User } = require("../models");
+const { Discussion, DiscussionMessage, MisconductRecord, Student, MisconductType, User, AcademicYear } = require("../models");
 const ApiError = require("../utils/ApiError");
 
 const CAN_MANAGE = ["dean_of_discipline", "manager"]; // Dean of Discipline and the school Manager can start, close, and reopen a thread
@@ -21,6 +21,25 @@ async function loadRecordInSchool(recordId, schoolId) {
   const record = await MisconductRecord.findByPk(recordId);
   if (!record || record.schoolId !== schoolId) throw ApiError.notFound("Record not found");
   return record;
+}
+
+/**
+ * Mirrors misconductRecordController's assertCurrentAcademicYear: a
+ * discussion is a live, in-progress conversation, so starting one,
+ * posting to it, or reopening it only makes sense against "right now" —
+ * the school's current academic year. Older years' discussions remain
+ * fully readable (and can still be closed if one was left open), but
+ * nobody should be able to keep a case-conference going on a record from
+ * a year that's already wrapped up.
+ */
+async function assertCurrentAcademicYear(academicYearId) {
+  const year = await AcademicYear.findByPk(academicYearId);
+  if (!year) throw ApiError.notFound("Academic year not found");
+  if (!year.isCurrent) {
+    throw ApiError.conflict(
+      `${year.name} isn't the current academic year — discussions can only be started, posted to, or reopened for the current year.`
+    );
+  }
 }
 
 const DISCUSSION_INCLUDE = [
@@ -49,6 +68,7 @@ async function open(req, res, next) {
     if (!misconductRecordId) return next(ApiError.badRequest("misconductRecordId is required"));
 
     const record = await loadRecordInSchool(misconductRecordId, req.schoolId);
+    await assertCurrentAcademicYear(record.academicYearId);
 
     const existing = await Discussion.findOne({ where: { misconductRecordId: record.id } });
     if (existing) {
@@ -115,9 +135,10 @@ async function reopen(req, res, next) {
   try {
     if (!CAN_MANAGE.includes(req.user.sbmsRole)) return next(ApiError.forbidden());
 
-    const discussion = await Discussion.findByPk(req.params.id);
+    const discussion = await Discussion.findByPk(req.params.id, { include: [{ model: MisconductRecord }] });
     if (!discussion || discussion.schoolId !== req.schoolId) return next(ApiError.notFound("Discussion not found"));
     if (discussion.status !== "closed") return next(ApiError.conflict("This discussion is already open"));
+    await assertCurrentAcademicYear(discussion.MisconductRecord.academicYearId);
 
     await discussion.update({
       status: "open",
@@ -142,6 +163,7 @@ async function addMessage(req, res, next) {
     if (discussion.status !== "open") return next(ApiError.conflict("This discussion is closed"));
 
     assertCanAccess(req, discussion.MisconductRecord);
+    await assertCurrentAcademicYear(discussion.MisconductRecord.academicYearId);
 
     const { message } = req.body;
     if (!message || !message.trim()) return next(ApiError.badRequest("message is required", "message"));
@@ -166,10 +188,14 @@ async function addMessage(req, res, next) {
  * GET /api/discussions?status=open — every discussion in the school this
  * user can see, newest first, for a general "what's being discussed"
  * view. A reporter only gets threads on records they reported.
+ * ?academicYearId=Y further narrows that overview to threads on records
+ * from one academic year — the frontend defaults this to the current
+ * year, same as Records/Dashboard, so past years' threads don't show up
+ * by default.
  */
 async function list(req, res, next) {
   try {
-    const { misconductRecordId, status } = req.query;
+    const { misconductRecordId, status, academicYearId } = req.query;
 
     if (misconductRecordId) {
       const record = await loadRecordInSchool(misconductRecordId, req.schoolId);
@@ -193,6 +219,10 @@ async function list(req, res, next) {
 
     if (req.user.sbmsRole === "reporter") {
       discussions = discussions.filter((d) => d.MisconductRecord?.reportedByUserId === req.user.id);
+    }
+
+    if (academicYearId) {
+      discussions = discussions.filter((d) => String(d.MisconductRecord?.academicYearId) === String(academicYearId));
     }
 
     res.json(discussions);

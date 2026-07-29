@@ -1,11 +1,11 @@
 require("dotenv").config();
 const sequelize = require("../src/config/database");
-const { MisconductType, MisconductRecord, MisconductEvidence, Discussion, DiscussionMessage } = require("../src/models");
+const { MisconductType, MisconductRecord, MisconductEvidence, Discussion, DiscussionMessage, Deliberation } = require("../src/models");
 
 /**
  * Creates/updates ONLY the tables SBMS owns: sbms_misconduct_types,
  * sbms_misconduct_records, sbms_misconduct_evidence, sbms_discussions,
- * sbms_discussion_messages.
+ * sbms_discussion_messages, sbms_deliberations.
  * Role assignment (Dean of Discipline / Disciplinary Officer) is no
  * longer SBMS's own table — it's the `disciplineRole` column on the main
  * system's `users` table, assigned from there. SBMS only reads it.
@@ -36,6 +36,9 @@ async function setup() {
 
     await DiscussionMessage.sync({ alter: true });
     console.log("sbms_discussion_messages ready.");
+
+    await Deliberation.sync({ alter: true });
+    console.log("sbms_deliberations ready.");
 
     console.log("Done. SBMS's own tables are set up — nothing else was touched.");
     console.log(

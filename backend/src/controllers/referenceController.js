@@ -1,6 +1,7 @@
-const { AcademicYear, Term, Class, Student, User, TeacherModuleAssignment } = require("../models");
+const { AcademicYear, Term, Class, Student, User, TeacherModuleAssignment, Deliberation, sequelize } = require("../models");
 const { Op } = require("sequelize");
 const ApiError = require("../utils/ApiError");
+const conductScoreService = require("../services/conductScoreService");
 
 /**
  * These four endpoints only ever SELECT from the shared reference tables —
@@ -68,9 +69,32 @@ async function classes(req, res, next) {
   }
 }
 
+/**
+ * A student who's been dismissed permanently (any term, ever) or
+ * dismissed for a specific term should never show up as pickable for
+ * recording a NEW incident against them — see deliberationController.
+ * Only excludes when termId is actually passed in, so callers that want
+ * the full roster regardless of dismissal (e.g. Records' "browse this
+ * class's history" view, which intentionally still shows a dismissed
+ * student so their past records stay reachable) can simply omit it.
+ */
+async function excludeDismissed(studentList, termId) {
+  if (!termId || studentList.length === 0) return studentList;
+  const ids = studentList.map((s) => s.id);
+  const deliberations = await Deliberation.findAll({
+    where: {
+      studentId: ids,
+      [Op.or]: [{ decision: "dismissed_permanently" }, { decision: "dismissed_term", termId }],
+    },
+    attributes: ["studentId"],
+  });
+  const excluded = new Set(deliberations.map((d) => d.studentId));
+  return studentList.filter((s) => !excluded.has(s.id));
+}
+
 async function students(req, res, next) {
   try {
-    const { classId } = req.query;
+    const { classId, termId } = req.query;
     if (!classId) return next(ApiError.badRequest("classId is required"));
     const klass = await Class.findByPk(classId);
     if (!klass || klass.schoolId !== req.schoolId) return next(ApiError.notFound("Class not found"));
@@ -78,7 +102,107 @@ async function students(req, res, next) {
       where: { classId, status: "active" },
       order: [["firstName", "ASC"]],
     });
-    res.json(list);
+    res.json(await excludeDismissed(list, termId));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Powers the header's live student search. Matches on first name, last
+ * name, admission number, or "first last" together, scoped to the school.
+ * A plain teacher (sbmsRole 'reporter') only searches within classes they
+ * actually teach this academic year — same restriction as classes()/
+ * students() above, so search can never surface a student they wouldn't
+ * otherwise be able to look up.
+ *
+ * Each result carries its class name plus, when there's a current academic
+ * year, that student's year-to-date conduct score — enough for the search
+ * dropdown to show "class + marks" at a glance before anyone clicks
+ * through to the full report. Deliberately capped at a handful of results;
+ * this is a quick-jump box, not a records browser.
+ */
+async function searchStudents(req, res, next) {
+  try {
+    if (!req.schoolId) return next(ApiError.badRequest("schoolId is required", "schoolId"));
+    const q = (req.query.q || "").trim();
+    if (q.length < 2) return res.json({ results: [], academicYearId: null });
+
+    const currentYear = await AcademicYear.findOne({ where: { schoolId: req.schoolId, isCurrent: true } });
+
+    const classWhere = { schoolId: req.schoolId };
+    if (currentYear) classWhere.academicYearId = currentYear.id;
+
+    let allowedClassIds = null;
+    if (req.user.sbmsRole === "reporter" && currentYear) {
+      const assignments = await TeacherModuleAssignment.findAll({
+        where: { teacherId: req.user.id, academicYearId: currentYear.id },
+        attributes: ["classId"],
+      });
+      allowedClassIds = [...new Set(assignments.map((a) => a.classId))];
+      if (allowedClassIds.length === 0) return res.json({ results: [], academicYearId: currentYear?.id || null });
+    }
+
+    const studentWhere = {
+      schoolId: req.schoolId,
+      status: "active",
+      [Op.or]: [
+        { firstName: { [Op.like]: `%${q}%` } },
+        { lastName: { [Op.like]: `%${q}%` } },
+        { admissionNumber: { [Op.like]: `%${q}%` } },
+        sequelize.where(
+          sequelize.fn("concat", sequelize.col("first_name"), " ", sequelize.col("last_name")),
+          { [Op.like]: `%${q}%` }
+        ),
+      ],
+    };
+    if (allowedClassIds) studentWhere.classId = allowedClassIds;
+
+    const students = await Student.findAll({
+      where: studentWhere,
+      order: [["firstName", "ASC"]],
+      limit: 8,
+    });
+    if (students.length === 0) return res.json({ results: [], academicYearId: currentYear?.id || null });
+
+    const classIds = [...new Set(students.map((s) => s.classId))];
+    const classes = await Class.findAll({ where: { id: classIds, ...classWhere } });
+    const classById = Object.fromEntries(classes.map((c) => [c.id, c]));
+
+    // The yearly conduct report the search dropdown opens combines every
+    // term for the current year — same restriction as the Yearly Report
+    // page, so a search result can't be used to sidestep it. Names only
+    // (not the full Term rows) since that's all the client needs for the
+    // blocking message.
+    let lockedTerms = [];
+    if (currentYear) {
+      const yearTerms = await Term.findAll({ where: { academicYearId: currentYear.id } });
+      lockedTerms = yearTerms.filter((t) => t.isLocked).map((t) => t.name);
+    }
+
+    const results = await Promise.all(
+      students.map(async (s) => {
+        const klass = classById[s.classId] || null;
+        // If the student's class isn't in the current academic year (e.g.
+        // they were promoted/moved and classWhere filtered it out), we
+        // still show the student — just without a resolvable class/score.
+        let conduct = null;
+        if (klass && currentYear) {
+          const year = await conductScoreService.getYearScore(s.id, currentYear.id);
+          conduct = { remaining: year.remaining, maxMarks: year.maxMarks, atRisk: year.remaining < year.maxMarks / 2 };
+        }
+        return {
+          id: s.id,
+          firstName: s.firstName,
+          lastName: s.lastName,
+          admissionNumber: s.admissionNumber,
+          class: klass ? { id: klass.id, name: klass.name } : null,
+          conduct,
+        };
+      })
+    );
+
+    res.json({ results, academicYearId: currentYear?.id || null, lockedTerms });
   } catch (err) {
     next(err);
   }
@@ -103,4 +227,4 @@ async function disciplineStaff(req, res, next) {
   }
 }
 
-module.exports = { academicYears, terms, classes, students, disciplineStaff };
+module.exports = { academicYears, terms, classes, students, searchStudents, disciplineStaff };

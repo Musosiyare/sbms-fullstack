@@ -1,6 +1,17 @@
 const conductScoreService = require("../services/conductScoreService");
-const { Student, Class, School, AcademicYear, Term, MisconductRecord, MisconductType, User } = require("../models");
+const {
+  Student,
+  Class,
+  School,
+  AcademicYear,
+  Term,
+  MisconductRecord,
+  MisconductType,
+  User,
+  Deliberation,
+} = require("../models");
 const ApiError = require("../utils/ApiError");
+const { Op } = require("sequelize");
 
 const DISCIPLINE_ROLE_LABEL = { dean_of_discipline: "Dean of Discipline", disciplinary_officer: "Disciplinary Officer" };
 const ROLE_LABEL = { manager: "Manager", teacher: "Teacher", superuser: "Superuser", discipline: "Discipline Staff" };
@@ -289,6 +300,111 @@ async function classYearlyConductReport(req, res, next) {
   }
 }
 
+const DISMISSAL_DECISIONS = ["dismissed_permanently", "dismissed_term"];
+
+/**
+ * Every dismissed student in the school for a given academic year —
+ * "dismissed permanently" (expelled outright, any term) and "dismissed
+ * for the term" (out for the remainder of whichever term they were
+ * decided in) pulled from the same Deliberation table the dashboard's
+ * exceeded-marks deliberation flow writes to. This is the read side: a
+ * school-wide list rather than one class/term at a time, so the
+ * discipline office can see everyone dismissed across the whole year at
+ * a glance.
+ *
+ * Filters:
+ * - academicYearId (required): which year's decisions to pull.
+ * - termId (optional): narrows to one term's decisions. Left blank ("all
+ *   terms"), every term's dismissals for the year are combined.
+ * - decision (optional): "dismissed_permanently" or "dismissed_term" to
+ *   see just one kind; left blank (or "all"), both kinds are included.
+ */
+async function dismissedStudentsReport(req, res, next) {
+  try {
+    const { academicYearId, termId, decision } = req.query;
+    if (!academicYearId) return next(ApiError.badRequest("academicYearId is required"));
+
+    const academicYear = await AcademicYear.findByPk(academicYearId);
+    if (!academicYear || academicYear.schoolId !== req.schoolId) {
+      return next(ApiError.notFound("Academic year not found"));
+    }
+
+    if (termId) {
+      const term = await Term.findByPk(termId);
+      if (!term || term.academicYearId !== Number(academicYearId)) {
+        return next(ApiError.notFound("Term not found"));
+      }
+    }
+
+    let decisions = DISMISSAL_DECISIONS;
+    if (decision && decision !== "all") {
+      if (!DISMISSAL_DECISIONS.includes(decision)) {
+        return next(ApiError.badRequest("decision must be 'dismissed_permanently', 'dismissed_term', or 'all'"));
+      }
+      decisions = [decision];
+    }
+
+    const where = {
+      schoolId: req.schoolId,
+      academicYearId,
+      decision: { [Op.in]: decisions },
+    };
+    if (termId) where.termId = termId;
+
+    const [school, dean, deliberations] = await Promise.all([
+      School.findByPk(req.schoolId),
+      User.findOne({
+        where: { schoolId: req.schoolId, disciplineRole: "dean_of_discipline", status: "active" },
+        attributes: ["id", "name", "email"],
+        order: [["id", "ASC"]],
+      }),
+      Deliberation.findAll({
+        where,
+        include: [
+          { model: Student },
+          { model: Class },
+          { model: Term },
+          { model: User, as: "decidedBy", attributes: ["id", "name", "role", "disciplineRole"] },
+        ],
+        order: [["decidedAt", "DESC"]],
+      }),
+    ]);
+
+    const results = deliberations
+      // A student record may since have been removed/reassigned schools —
+      // guard defensively rather than let a stale row 500 the whole list.
+      .filter((d) => d.Student)
+      .map((d) => ({
+        deliberationId: d.id,
+        studentId: d.studentId,
+        firstName: d.Student.firstName,
+        lastName: d.Student.lastName,
+        admissionNumber: d.Student.admissionNumber,
+        guardianName: d.Student.guardianName,
+        guardianPhone: d.Student.guardianPhone,
+        classId: d.classId,
+        className: d.Class?.name || null,
+        termId: d.termId,
+        termName: d.Term?.name || null,
+        decision: d.decision,
+        reason: d.reason,
+        decidedBy: d.decidedBy?.name || null,
+        decidedByRole: roleLabel(d.decidedBy),
+        decidedAt: d.decidedAt,
+      }));
+
+    res.json({
+      school: { id: school.id, name: school.name },
+      academicYear: { id: academicYear.id, name: academicYear.name },
+      deanOfDiscipline: dean ? { name: dean.name, email: dean.email } : null,
+      generatedAt: new Date().toISOString(),
+      students: results,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 /**
  * Everything needed to print the "Weekend Permission" slip for one
  * finalized, send-home record: school header (name/address/phone/email),
@@ -379,5 +495,6 @@ module.exports = {
   classConductReport,
   studentYearlyConductReport,
   classYearlyConductReport,
+  dismissedStudentsReport,
   weekendPermission,
 };

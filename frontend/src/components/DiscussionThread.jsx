@@ -79,7 +79,7 @@ function MessageBubble({ msg, isSelf }) {
  * and reopening a thread. `discussion` is `null` when nothing has been
  * started yet, `undefined` while loading.
  */
-export default function DiscussionThread({ record, discussion, currentUser, onChange }) {
+export default function DiscussionThread({ record, discussion, currentUser, onChange, isCurrentYear = true }) {
   const [draft, setDraft] = useState("");
   const [closingNote, setClosingNote] = useState("");
   const [showCloseForm, setShowCloseForm] = useState(false);
@@ -88,7 +88,11 @@ export default function DiscussionThread({ record, discussion, currentUser, onCh
   const isDod = currentUser.sbmsRole === "dean_of_discipline";
   const isManager = currentUser.sbmsRole === "manager";
   const canManage = isDod || isManager; // Dean of Discipline and Manager: start, close, reopen
-  const canPost = discussion && discussion.status === "open";
+  // A discussion is a live conversation, so starting, posting to, or
+  // reopening one only makes sense for the current academic year — old
+  // years' threads stay fully readable (and closable), same as the
+  // backend's assertCurrentAcademicYear.
+  const canPost = discussion && discussion.status === "open" && isCurrentYear;
 
   async function handleStart() {
     setBusy(true);
@@ -153,7 +157,12 @@ export default function DiscussionThread({ record, discussion, currentUser, onCh
         <div className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-50 text-brand-500">
           <MessageCircle size={20} strokeWidth={2.25} />
         </div>
-        {canManage ? (
+        {!isCurrentYear ? (
+          <p className="text-sm text-slate-500">
+            No discussion was opened on this record, and it's from a past academic year — discussions can only be
+            started for the current year.
+          </p>
+        ) : canManage ? (
           <>
             <p className="text-sm text-slate-600">
               No discussion yet. Start one to loop in the teacher, discipline staff, and manager before deciding.
@@ -244,7 +253,9 @@ export default function DiscussionThread({ record, discussion, currentUser, onCh
         </div>
       ) : (
         <p className="border-t border-slate-100 pt-3 text-center text-xs text-slate-400">
-          This discussion is closed — nobody can post until it's reopened.
+          {!isCurrentYear
+            ? "This record is from a past academic year — this discussion is read-only."
+            : "This discussion is closed — nobody can post until it's reopened."}
         </p>
       )}
 
@@ -274,10 +285,14 @@ export default function DiscussionThread({ record, discussion, currentUser, onCh
                 <Lock size={13} /> End discussion
               </Button>
             )
-          ) : (
+          ) : isCurrentYear ? (
             <Button variant="secondary" size="sm" onClick={handleReopen} disabled={busy}>
               <LockOpen size={13} /> Reopen discussion
             </Button>
+          ) : (
+            <p className="text-center text-xs text-slate-400">
+              This discussion is closed and can't be reopened — its record is from a past academic year.
+            </p>
           )}
         </div>
       )}

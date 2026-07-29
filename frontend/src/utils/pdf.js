@@ -503,6 +503,117 @@ export function exportYearlyDecisionsPdf({ school, klass, academicYear, deanOfDi
   pdf.save(filename);
 }
 
+const DISMISSAL_LABEL = {
+  dismissed_permanently: "Dismissed permanently",
+  dismissed_term: "Dismissed (term)",
+};
+
+/**
+ * Builds the "Dismissed students" PDF — every dismissed student for the
+ * chosen academic year (optionally narrowed to one term and/or one
+ * dismissal kind), with which term/class they were dismissed from, the
+ * reason, and who decided it. Mirrors exportYearlyDecisionsPdf's layout
+ * (single table, sign-off footer) since it's the same kind of flat
+ * decisions list, just school-wide instead of one class.
+ */
+export function exportDismissedStudentsPdf({ school, academicYear, termLabel, deanOfDiscipline, students }, filename) {
+  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
+  const pageWidth = A4.height; // landscape: width/height swapped
+  let y = MARGIN + 5;
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(14);
+  pdf.setTextColor(...SLATE_800);
+  pdf.text(school.name.toUpperCase(), MARGIN, y);
+  y += 6;
+
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(9.5);
+  [
+    ["Academic Year: ", academicYear.name],
+    ["Term: ", termLabel || "All terms"],
+  ].forEach(([label, value]) => {
+    pdf.setFont("helvetica", "bold");
+    const labelWidth = pdf.getTextWidth(label);
+    pdf.text(label, MARGIN, y);
+    pdf.setFont("helvetica", "normal");
+    pdf.text(value, MARGIN + labelWidth, y);
+    y += 4.6;
+  });
+
+  y += 1.5;
+  pdf.setDrawColor(...SLATE_800);
+  pdf.setLineWidth(0.6);
+  pdf.line(MARGIN, y, pageWidth - MARGIN, y);
+  y += 9;
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(13);
+  pdf.setTextColor(...SLATE_800);
+  pdf.text("DISMISSED STUDENTS", pageWidth / 2, y, { align: "center" });
+  y += 6;
+
+  autoTable(pdf, {
+    startY: y,
+    margin: { left: MARGIN, right: MARGIN, bottom: MARGIN + 16 },
+    head: [["#", "Student", "Admission No.", "Class", "Term", "Decision", "Decided by", "Date"]],
+    body: students.map((s, idx) => [
+      String(idx + 1),
+      `${s.firstName} ${s.lastName}`,
+      s.admissionNumber || "—",
+      s.className || "—",
+      s.termName || "—",
+      DISMISSAL_LABEL[s.decision] || s.decision,
+      s.decidedBy || "—",
+      formatDate(s.decidedAt),
+    ]),
+    theme: "grid",
+    styles: {
+      font: "helvetica",
+      fontSize: 9,
+      textColor: SLATE_800,
+      lineColor: SLATE_300,
+      lineWidth: 0.2,
+      cellPadding: 2.2,
+    },
+    headStyles: {
+      fillColor: SLATE_100,
+      textColor: SLATE_800,
+      fontStyle: "bold",
+      lineColor: SLATE_300,
+    },
+    columnStyles: {
+      0: { cellWidth: 8, halign: "center" },
+      5: { halign: "center" },
+      7: { halign: "center" },
+    },
+    didParseCell: (data) => {
+      if (data.section === "body" && data.column.index === 5) {
+        data.cell.styles.textColor = data.cell.raw === DISMISSAL_LABEL.dismissed_permanently ? RED_700 : AMBER_600;
+        data.cell.styles.fontStyle = "bold";
+      }
+    },
+  });
+
+  const pageCount = pdf.internal.getNumberOfPages();
+  pdf.setPage(pageCount);
+  const footerY = A4.width - MARGIN; // A4.width doubles as landscape page height
+  pdf.setDrawColor(...SLATE_400);
+  pdf.setLineWidth(0.3);
+  pdf.line(MARGIN, footerY - 10, MARGIN + 60, footerY - 10);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(9);
+  pdf.setTextColor(...SLATE_600);
+  pdf.text("Dean of Discipline signature", MARGIN, footerY - 6);
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(10);
+  pdf.setTextColor(...SLATE_800);
+  pdf.text(deanOfDiscipline?.name || "Dean of Discipline", pageWidth - MARGIN, footerY - 6, { align: "right" });
+
+  pdf.save(filename);
+}
+
 /**
  * Builds the "Conduct report" PDF: every active student's termly report,
  * one per page (same as the old print-all layout), and triggers the

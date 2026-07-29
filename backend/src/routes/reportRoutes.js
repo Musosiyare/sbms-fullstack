@@ -10,6 +10,7 @@ router.get("/student/:studentId", ctrl.studentReport);
 router.get("/student/:studentId/conduct", ctrl.studentConductReport);
 router.get("/student/:studentId/yearly-conduct", ctrl.studentYearlyConductReport);
 router.get("/class/:classId/yearly-conduct", ctrl.classYearlyConductReport);
+router.get("/dismissed-students", ctrl.dismissedStudentsReport);
 router.get("/record/:recordId/weekend-permission", ctrl.weekendPermission);
 
 module.exports = router;

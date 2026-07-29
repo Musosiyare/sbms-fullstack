@@ -8,6 +8,7 @@ router.get("/academic-years", ctrl.academicYears);
 router.get("/terms", ctrl.terms);
 router.get("/classes", ctrl.classes);
 router.get("/students", ctrl.students);
+router.get("/students/search", ctrl.searchStudents);
 router.get("/discipline-staff", ctrl.disciplineStaff);
 
 module.exports = router;

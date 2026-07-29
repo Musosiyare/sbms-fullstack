@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import Card from "../components/ui/Card";
 import Badge from "../components/ui/Badge";
+import PillSelect from "../components/ui/PillSelect";
 import DiscussionModal from "../components/DiscussionModal";
-import { listDiscussions } from "../api/sbms";
+import { listDiscussions, getAcademicYears } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
 import { MessageCircle, LockOpen, Lock, Gavel } from "lucide-react";
 
@@ -66,13 +67,31 @@ export default function Discussions() {
   const [tab, setTab] = useState("open");
   const [discussions, setDiscussions] = useState(null);
   const [active, setActive] = useState(null);
+  // Unlike Records/Dashboard, this page had no year scoping at all, so it
+  // was showing every year's threads mixed together. Bring it in line
+  // with the rest of the app: default to the current year, with the
+  // picker still available to deliberately look back at past years.
+  const [academicYears, setAcademicYears] = useState([]);
+  const [academicYearId, setAcademicYearId] = useState("");
 
   useEffect(() => {
+    getAcademicYears().then((years) => {
+      setAcademicYears(years);
+      const current = years.find((y) => y.isCurrent) || years[0];
+      if (current) setAcademicYearId(String(current.id));
+    });
+  }, []);
+
+  const isCurrentYearSelected =
+    !academicYearId || academicYears.find((y) => String(y.id) === String(academicYearId))?.isCurrent !== false;
+
+  useEffect(() => {
+    if (!academicYearId) return;
     setDiscussions(null);
-    listDiscussions({ status: tab })
+    listDiscussions({ status: tab, academicYearId })
       .then(setDiscussions)
       .catch(() => setDiscussions([]));
-  }, [tab]);
+  }, [tab, academicYearId]);
 
   return (
     <div>
@@ -80,19 +99,37 @@ export default function Discussions() {
         title="Discussions"
         subtitle="Case-conference threads on students' mistakes — reported, discussed, and decided together."
       >
-        <div className="mb-5 flex items-center gap-2">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
-                tab === t.key ? "bg-brand-500 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
+                  tab === t.key ? "bg-brand-500 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {academicYears.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-slate-400 shrink-0">Year</span>
+              <PillSelect
+                options={academicYears.map((y) => ({ id: y.id, label: y.name }))}
+                value={academicYearId}
+                onChange={setAcademicYearId}
+              />
+            </div>
+          )}
         </div>
+        {!isCurrentYearSelected && (
+          <p className="mb-4 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3.5 py-2.5">
+            Viewing a past academic year — these threads are read-only; nobody can post, start, or reopen a
+            discussion here anymore.
+          </p>
+        )}
 
         {discussions === null ? (
           <p className="py-8 text-center text-sm text-slate-400">Loading...</p>
@@ -104,7 +141,7 @@ export default function Discussions() {
                 ? "No open discussions right now."
                 : "No discussions have been closed yet."}
             </p>
-            {["dean_of_discipline", "manager"].includes(user.sbmsRole) && tab === "open" && (
+            {["dean_of_discipline", "manager"].includes(user.sbmsRole) && tab === "open" && isCurrentYearSelected && (
               <p className="max-w-sm text-xs text-slate-400">
                 Start one from a record's "Discuss" button on the Records page.
               </p>
@@ -123,10 +160,11 @@ export default function Discussions() {
         <DiscussionModal
           record={active.MisconductRecord}
           currentUser={user}
+          isCurrentYear={isCurrentYearSelected}
           onClose={() => {
             setActive(null);
             // Refresh the list in case status changed while the thread was open.
-            listDiscussions({ status: tab })
+            listDiscussions({ status: tab, academicYearId })
               .then(setDiscussions)
               .catch(() => {});
           }}

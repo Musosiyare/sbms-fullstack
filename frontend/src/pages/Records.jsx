@@ -7,7 +7,7 @@ import Button from "../components/ui/Button";
 import Badge from "../components/ui/Badge";
 import Modal from "../components/ui/Modal";
 import { Field, Select, Input, Textarea } from "../components/ui/FormField";
-import { ErrorText, TermLockBadge, AllTermsLockedNotice } from "../components/ui/Alerts";
+import { ErrorText, TermLockBadge, AllTermsLockedNotice, NotCurrentYearNotice } from "../components/ui/Alerts";
 import EvidenceUpload, { EvidenceFieldLabel } from "../components/ui/EvidenceUpload";
 import EvidenceList from "../components/ui/EvidenceList";
 import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
@@ -27,6 +27,7 @@ import {
   getStudents,
   getTerms,
   getWeekendPermission,
+  getStudentScore,
 } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
 import { exportWeekendPermissionPdf } from "../utils/pdf";
@@ -674,7 +675,12 @@ export default function Records() {
       )}
 
       {discussTarget && (
-        <DiscussionModal record={discussTarget} currentUser={user} onClose={() => setDiscussTarget(null)} />
+        <DiscussionModal
+          record={discussTarget}
+          currentUser={user}
+          onClose={() => setDiscussTarget(null)}
+          isCurrentYear={isCurrentYearSelected}
+        />
       )}
     </div>
   );
@@ -1135,13 +1141,18 @@ function ApproveModal({ record, onClose, onDone }) {
     setError("");
     setSubmitting(true);
     try {
-      await approveRecord(record.id, {
+      const result = await approveRecord(record.id, {
         sentHomeFrom: sentHomeFrom || undefined,
         sentHomeTo: sentHomeTo || undefined,
       });
       toast.success("Report approved", {
         description: `${deduction} mark${deduction === 1 ? "" : "s"} deducted from ${record.Student?.firstName}.`,
       });
+      if (result.marksExceeded) {
+        toast.warning("Student has used up all conduct marks allowed this term", {
+          description: `${studentName.trim()} — refer for deliberation.`,
+        });
+      }
       // A send-home incident means there's now a permission slip to hand
       // the student — pause here so it can be downloaded right away,
       // instead of closing straight back to the list.
@@ -1363,6 +1374,13 @@ function BulkApproveModal({ ids, records, onClose, onDone }) {
         setResult(res);
         toast.success(`${res.approved.length} approved, ${res.failed.length} failed`);
       }
+      if (res.exceededStudents?.length) {
+        const names = res.exceededStudents.map((s) => `${s.firstName} ${s.lastName}`).join(", ");
+        toast.warning(
+          `${res.exceededStudents.length} student${res.exceededStudents.length === 1 ? " has" : "s have"} used up all conduct marks allowed this term`,
+          { description: `${names} — refer for deliberation.` }
+        );
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1543,6 +1561,9 @@ function BulkRejectModal({ ids, records, onClose, onDone }) {
  * be left out of an otherwise class-wide action — e.g. students who were
  * absent, or who did clean up while the rest of the class didn't.
  */
+// Mirrors MARKS_PER_TERM in the backend's conductScoreService.
+const MAX_TERM_MARKS = 40;
+
 function ClassDeductModal({ types, onClose, onDone }) {
   const scope = useScopePicker();
   const [misconductTypeId, setMisconductTypeId] = useState("");
@@ -1587,6 +1608,10 @@ function ClassDeductModal({ types, onClose, onDone }) {
       setError("Pick the class and term.");
       return;
     }
+    if (!scope.isCurrentAcademicYear) {
+      setError("Records can only be created for the current academic year — switch back to the current year.");
+      return;
+    }
     if (!useCustom && !misconductTypeId) {
       setError("Pick a misconduct type, or switch to a custom entry.");
       return;
@@ -1603,6 +1628,9 @@ function ClassDeductModal({ types, onClose, onDone }) {
       setError("Marks deducted must be a positive number.");
       return;
     }
+    // Whether this exceeds the term's total conduct marks is checked and
+    // enforced by the backend, not here — its error message is shown
+    // above if it rejects it.
     if (targetCount === 0) {
       setError("Every student in this class is excluded — nobody would receive this deduction.");
       return;
@@ -1621,8 +1649,23 @@ function ClassDeductModal({ types, onClose, onDone }) {
         excludeStudentIds: [...excludedIds],
       });
       toast.success("Class deduction applied", {
-        description: `${result.count} student${result.count === 1 ? "" : "s"} in ${result.className} had -${result.marksDeducted} marks recorded.`,
+        description: `${result.count} student${result.count === 1 ? "" : "s"} in ${result.className} had -${result.marksDeducted} marks recorded (capped at each student's remaining termly marks).${
+          result.skippedSendHome?.length
+            ? ` ${result.skippedSendHome.length} student${result.skippedSendHome.length === 1 ? "" : "s"} skipped — already on an active send-home period.`
+            : ""
+        }${
+          result.skippedDismissed?.length
+            ? ` ${result.skippedDismissed.length} student${result.skippedDismissed.length === 1 ? "" : "s"} skipped — dismissed.`
+            : ""
+        }`,
       });
+      if (result.exceededStudents?.length) {
+        const names = result.exceededStudents.map((s) => `${s.firstName} ${s.lastName}`).join(", ");
+        toast.warning(
+          `${result.exceededStudents.length} student${result.exceededStudents.length === 1 ? " has" : "s have"} used up all conduct marks allowed this term`,
+          { description: `${names} — refer for deliberation.` }
+        );
+      }
       onDone();
     } catch (err) {
       setError(err.message);
@@ -1634,7 +1677,7 @@ function ClassDeductModal({ types, onClose, onDone }) {
   return (
     <Modal open onClose={onClose} title="Deduct marks from a whole class" size="lg">
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <p className="text-xs text-slate-400 -mt-1">
+        <p className="text-xs text-brand-600 -mt-1">
           Applies the same deduction to every active student in the class at once — finalized immediately, no
           review needed. Uncheck any students below to leave them out.
         </p>
@@ -1650,7 +1693,11 @@ function ClassDeductModal({ types, onClose, onDone }) {
             </Select>
           </Field>
           <Field label="Term">
-            <Select value={scope.termId} onChange={(e) => scope.setTermId(e.target.value)} disabled={!scope.terms.length}>
+            <Select
+              value={scope.termId}
+              onChange={(e) => scope.setTermId(e.target.value)}
+              disabled={!scope.terms.length || !scope.isCurrentAcademicYear}
+            >
               <option value="">Select...</option>
               {scope.terms.map((t) => (
                 <option key={t.id} value={t.id} disabled={t.isLocked}>
@@ -1664,9 +1711,18 @@ function ClassDeductModal({ types, onClose, onDone }) {
         </div>
 
         {scope.terms.length > 0 && scope.terms.every((t) => t.isLocked) && <AllTermsLockedNotice />}
+        {!scope.isCurrentAcademicYear && (
+          <NotCurrentYearNotice
+            yearName={scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId))?.name}
+          />
+        )}
 
         <Field label="Class">
-          <Select value={scope.classId} onChange={(e) => scope.setClassId(e.target.value)} disabled={!scope.classes.length}>
+          <Select
+            value={scope.classId}
+            onChange={(e) => scope.setClassId(e.target.value)}
+            disabled={!scope.classes.length || !scope.isCurrentAcademicYear}
+          >
             <option value="">Select...</option>
             {scope.classes.map((c) => (
               <option key={c.id} value={c.id}>
@@ -1680,14 +1736,16 @@ function ClassDeductModal({ types, onClose, onDone }) {
           <button
             type="button"
             onClick={() => setUseCustom(false)}
-            className={`px-3 py-1.5 rounded-lg border ${!useCustom ? "bg-brand-50 border-brand-200 text-brand-600" : "border-slate-200 text-slate-500"}`}
+            disabled={!scope.isCurrentAcademicYear}
+            className={`px-3 py-1.5 rounded-lg border disabled:opacity-40 ${!useCustom ? "bg-brand-50 border-brand-200 text-brand-600" : "border-slate-200 text-slate-500"}`}
           >
             From catalog
           </button>
           <button
             type="button"
             onClick={() => setUseCustom(true)}
-            className={`px-3 py-1.5 rounded-lg border ${useCustom ? "bg-brand-50 border-brand-200 text-brand-600" : "border-slate-200 text-slate-500"}`}
+            disabled={!scope.isCurrentAcademicYear}
+            className={`px-3 py-1.5 rounded-lg border disabled:opacity-40 ${useCustom ? "bg-brand-50 border-brand-200 text-brand-600" : "border-slate-200 text-slate-500"}`}
           >
             Custom entry
           </button>
@@ -1695,11 +1753,16 @@ function ClassDeductModal({ types, onClose, onDone }) {
 
         {useCustom ? (
           <Field label="Title">
-            <Input value={customTitle} onChange={(e) => setCustomTitle(e.target.value)} placeholder="e.g. Refused to clean the classroom" />
+            <Input
+              value={customTitle}
+              onChange={(e) => setCustomTitle(e.target.value)}
+              placeholder="e.g. Refused to clean the classroom"
+              disabled={!scope.isCurrentAcademicYear}
+            />
           </Field>
         ) : (
           <Field label="Misconduct type">
-            <Select value={misconductTypeId} onChange={(e) => handleTypeChange(e.target.value)}>
+            <Select value={misconductTypeId} onChange={(e) => handleTypeChange(e.target.value)} disabled={!scope.isCurrentAcademicYear}>
               <option value="">Select...</option>
               {types
                 .filter((t) => !t.requiresSendHome)
@@ -1733,8 +1796,13 @@ function ClassDeductModal({ types, onClose, onDone }) {
         )}
 
         {useCustom ? (
-          <Field label="Marks deducted">
-            <Input type="number" min="1" value={marksDeducted} onChange={(e) => setMarksDeducted(e.target.value)} />
+          <Field label={`Marks deducted (max ${MAX_TERM_MARKS})`}>
+            <Input
+              type="number"
+              value={marksDeducted}
+              onChange={(e) => setMarksDeducted(e.target.value)}
+              disabled={!scope.isCurrentAcademicYear}
+            />
           </Field>
         ) : (
           <Field label="Marks deducted">
@@ -1752,7 +1820,12 @@ function ClassDeductModal({ types, onClose, onDone }) {
         )}
 
         <Field label="Notes (optional)">
-          <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+          <Textarea
+            rows={2}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            disabled={!scope.isCurrentAcademicYear}
+          />
         </Field>
 
         {scope.classId && (
@@ -1767,6 +1840,7 @@ function ClassDeductModal({ types, onClose, onDone }) {
                       type="checkbox"
                       checked={!excludedIds.has(s.id)}
                       onChange={() => toggleExcluded(s.id)}
+                      disabled={!scope.isCurrentAcademicYear}
                       className="rounded border-slate-300"
                     />
                     <span className="text-slate-700">
@@ -1784,7 +1858,10 @@ function ClassDeductModal({ types, onClose, onDone }) {
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" disabled={submitting || blockedBySendHome || targetCount === 0}>
+          <Button
+            type="submit"
+            disabled={submitting || blockedBySendHome || targetCount === 0 || !scope.isCurrentAcademicYear}
+          >
             {submitting ? "Applying..." : `Apply to ${targetCount || 0} student${targetCount === 1 ? "" : "s"}`}
           </Button>
         </div>
@@ -1807,19 +1884,29 @@ function NewRecordModal({ types, onClose, onDone }) {
   const [error, setError] = useState("");
   const [useCustom, setUseCustom] = useState(false);
   const [studentWarning, setStudentWarning] = useState(null); // { title, until } | null
+  const [marksExceeded, setMarksExceeded] = useState(false);
   const [checkingStudent, setCheckingStudent] = useState(false);
 
   // Check right when a student is picked — not at submit time — so
   // nobody fills out the whole form before finding out it can't be saved.
+  // Also re-checks if the term changes while the same student stays
+  // selected, since "marks exceeded" is scoped to a term.
   useEffect(() => {
     if (!scope.studentId) {
       setStudentWarning(null);
+      setMarksExceeded(false);
       return;
     }
     setStudentWarning(null);
+    setMarksExceeded(false);
     setCheckingStudent(true);
-    listRecords({ studentId: scope.studentId, status: "finalized" })
-      .then((records) => {
+    Promise.all([
+      listRecords({ studentId: scope.studentId, status: "finalized" }),
+      scope.termId && scope.academicYearId
+        ? getStudentScore(scope.studentId, { termId: scope.termId, academicYearId: scope.academicYearId })
+        : Promise.resolve(null),
+    ])
+      .then(([records, score]) => {
         const today = toDateOnly(new Date());
         const active = records.find(
           (r) => r.sentHomeFrom && r.sentHomeTo && r.sentHomeFrom <= today && r.sentHomeTo >= today
@@ -1830,9 +1917,12 @@ function NewRecordModal({ types, onClose, onDone }) {
             until: active.sentHomeTo,
           });
         }
+        if (score?.term && score.term.remaining <= 0) {
+          setMarksExceeded(true);
+        }
       })
       .finally(() => setCheckingStudent(false));
-  }, [scope.studentId]);
+  }, [scope.studentId, scope.termId, scope.academicYearId]);
 
   const selectedType = types.find((t) => String(t.id) === misconductTypeId);
   const officerBlockedBySendHome =
@@ -1861,8 +1951,16 @@ function NewRecordModal({ types, onClose, onDone }) {
       setError("Pick the student, class, and term.");
       return;
     }
+    if (!scope.isCurrentAcademicYear) {
+      setError("Records can only be created for the current academic year — switch back to the current year.");
+      return;
+    }
     if (studentWarning) {
       setError("This student is already sent home — pick a different student.");
+      return;
+    }
+    if (marksExceeded) {
+      setError("This student has already used up all conduct marks allowed this term — refer them for deliberation instead.");
       return;
     }
     if (!useCustom && !misconductTypeId) {
@@ -1881,10 +1979,13 @@ function NewRecordModal({ types, onClose, onDone }) {
       setError("Marks deducted must be a positive number.");
       return;
     }
+    // Whether this exceeds the term's total conduct marks is checked and
+    // enforced by the backend, not here — its error message is shown
+    // above if it rejects it.
 
     setSubmitting(true);
     try {
-      await createRecord(
+      const result = await createRecord(
         {
           studentId: scope.studentId,
           termId: scope.termId,
@@ -1898,7 +1999,14 @@ function NewRecordModal({ types, onClose, onDone }) {
         },
         files
       );
-      toast.success("Record saved", { description: "The mark deduction has been applied." });
+      toast.success("Record saved", {
+        description: "The mark deduction has been applied (capped at the student's remaining termly marks, if lower).",
+      });
+      if (result.marksExceeded) {
+        toast.warning("Student has used up all conduct marks allowed this term", {
+          description: `${result.marksExceededMessage}`,
+        });
+      }
       onDone();
     } catch (err) {
       setError(err.message);
@@ -1910,7 +2018,7 @@ function NewRecordModal({ types, onClose, onDone }) {
   return (
     <Modal open onClose={onClose} title="Record a mistake" size="lg">
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <p className="text-xs text-slate-400 -mt-1">
+        <p className="text-xs text-brand-600 -mt-1">
           Recorded directly by you — no review needed, marks apply immediately.
         </p>
         <div className="grid sm:grid-cols-2 gap-4">
@@ -1925,7 +2033,11 @@ function NewRecordModal({ types, onClose, onDone }) {
             </Select>
           </Field>
           <Field label="Term">
-            <Select value={scope.termId} onChange={(e) => scope.setTermId(e.target.value)} disabled={!scope.terms.length}>
+            <Select
+              value={scope.termId}
+              onChange={(e) => scope.setTermId(e.target.value)}
+              disabled={!scope.terms.length || !scope.isCurrentAcademicYear}
+            >
               <option value="">Select...</option>
               {scope.terms.map((t) => (
                 <option key={t.id} value={t.id} disabled={t.isLocked}>
@@ -1939,10 +2051,19 @@ function NewRecordModal({ types, onClose, onDone }) {
         </div>
 
         {scope.terms.length > 0 && scope.terms.every((t) => t.isLocked) && <AllTermsLockedNotice />}
+        {!scope.isCurrentAcademicYear && (
+          <NotCurrentYearNotice
+            yearName={scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId))?.name}
+          />
+        )}
 
         <div className="grid sm:grid-cols-2 gap-4">
           <Field label="Class">
-            <Select value={scope.classId} onChange={(e) => scope.setClassId(e.target.value)} disabled={!scope.classes.length}>
+            <Select
+              value={scope.classId}
+              onChange={(e) => scope.setClassId(e.target.value)}
+              disabled={!scope.classes.length || !scope.isCurrentAcademicYear}
+            >
               <option value="">Select...</option>
               {scope.classes.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -1952,7 +2073,11 @@ function NewRecordModal({ types, onClose, onDone }) {
             </Select>
           </Field>
           <Field label="Student">
-            <Select value={scope.studentId} onChange={(e) => scope.setStudentId(e.target.value)} disabled={!scope.students.length}>
+            <Select
+              value={scope.studentId}
+              onChange={(e) => scope.setStudentId(e.target.value)}
+              disabled={!scope.students.length || !scope.isCurrentAcademicYear}
+            >
               <option value="">Select...</option>
               {scope.students.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -1976,13 +2101,25 @@ function NewRecordModal({ types, onClose, onDone }) {
               </p>
             </div>
           </div>
+        ) : marksExceeded ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3.5 text-sm text-red-700 flex items-start gap-2.5">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">All conduct marks used up this term</p>
+              <p className="mt-0.5 text-red-600/90">
+                This student has already used up all {MAX_TERM_MARKS} conduct marks allowed for this term — refer
+                them for deliberation instead of recording another deduction.
+              </p>
+            </div>
+          </div>
         ) : (
           <>
         <div className="flex items-center gap-2 text-sm">
           <button
             type="button"
             onClick={() => setUseCustom(false)}
-            className={`px-3 py-1.5 rounded-lg border ${!useCustom ? "bg-brand-50 border-brand-200 text-brand-600" : "border-slate-200 text-slate-500"}`}
+            disabled={!scope.isCurrentAcademicYear}
+            className={`px-3 py-1.5 rounded-lg border disabled:opacity-40 ${!useCustom ? "bg-brand-50 border-brand-200 text-brand-600" : "border-slate-200 text-slate-500"}`}
           >
             From catalog
           </button>
@@ -1993,7 +2130,8 @@ function NewRecordModal({ types, onClose, onDone }) {
               setSentHomeFrom("");
               setSentHomeTo("");
             }}
-            className={`px-3 py-1.5 rounded-lg border ${useCustom ? "bg-brand-50 border-brand-200 text-brand-600" : "border-slate-200 text-slate-500"}`}
+            disabled={!scope.isCurrentAcademicYear}
+            className={`px-3 py-1.5 rounded-lg border disabled:opacity-40 ${useCustom ? "bg-brand-50 border-brand-200 text-brand-600" : "border-slate-200 text-slate-500"}`}
           >
             Custom entry
           </button>
@@ -2001,11 +2139,16 @@ function NewRecordModal({ types, onClose, onDone }) {
 
         {useCustom ? (
           <Field label="Title">
-            <Input value={customTitle} onChange={(e) => setCustomTitle(e.target.value)} placeholder="e.g. Vandalizing school property" />
+            <Input
+              value={customTitle}
+              onChange={(e) => setCustomTitle(e.target.value)}
+              placeholder="e.g. Vandalizing school property"
+              disabled={!scope.isCurrentAcademicYear}
+            />
           </Field>
         ) : (
           <Field label="Misconduct type">
-            <Select value={misconductTypeId} onChange={(e) => handleTypeChange(e.target.value)}>
+            <Select value={misconductTypeId} onChange={(e) => handleTypeChange(e.target.value)} disabled={!scope.isCurrentAcademicYear}>
               <option value="">Select...</option>
               {types.map((t) => (
                 <option key={t.id} value={t.id}>
@@ -2033,8 +2176,13 @@ function NewRecordModal({ types, onClose, onDone }) {
         )}
 
         {useCustom ? (
-          <Field label="Marks deducted">
-            <Input type="number" min="1" value={marksDeducted} onChange={(e) => setMarksDeducted(e.target.value)} />
+          <Field label={`Marks deducted (max ${MAX_TERM_MARKS})`}>
+            <Input
+              type="number"
+              value={marksDeducted}
+              onChange={(e) => setMarksDeducted(e.target.value)}
+              disabled={!scope.isCurrentAcademicYear}
+            />
           </Field>
         ) : (
           <Field label="Marks deducted">
@@ -2052,13 +2200,18 @@ function NewRecordModal({ types, onClose, onDone }) {
         )}
 
         <Field label="Notes (optional)">
-          <Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
+          <Textarea
+            rows={3}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            disabled={!scope.isCurrentAcademicYear}
+          />
         </Field>
 
         <Field label={<EvidenceFieldLabel />}>
           <EvidenceUpload
             files={files}
-            disabled={submitting}
+            disabled={submitting || !scope.isCurrentAcademicYear}
             onChange={(next, uploadError) => {
               setFiles(next);
               if (uploadError) setError(uploadError);
@@ -2073,10 +2226,20 @@ function NewRecordModal({ types, onClose, onDone }) {
             </p>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Sent home from">
-                <Input type="date" value={sentHomeFrom} onChange={(e) => setSentHomeFrom(e.target.value)} />
+                <Input
+                  type="date"
+                  value={sentHomeFrom}
+                  onChange={(e) => setSentHomeFrom(e.target.value)}
+                  disabled={!scope.isCurrentAcademicYear}
+                />
               </Field>
               <Field label="Sent home to">
-                <Input type="date" value={sentHomeTo} onChange={(e) => setSentHomeTo(e.target.value)} />
+                <Input
+                  type="date"
+                  value={sentHomeTo}
+                  onChange={(e) => setSentHomeTo(e.target.value)}
+                  disabled={!scope.isCurrentAcademicYear}
+                />
               </Field>
             </div>
           </>
@@ -2089,7 +2252,12 @@ function NewRecordModal({ types, onClose, onDone }) {
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" disabled={submitting || !!studentWarning || officerBlockedBySendHome}>
+          <Button
+            type="submit"
+            disabled={
+              submitting || !!studentWarning || marksExceeded || officerBlockedBySendHome || !scope.isCurrentAcademicYear
+            }
+          >
             {submitting ? "Saving..." : "Save record"}
           </Button>
         </div>
