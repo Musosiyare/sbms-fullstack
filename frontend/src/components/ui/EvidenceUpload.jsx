@@ -75,7 +75,7 @@ export default function EvidenceUpload({ files, onChange, disabled = false }) {
         className={`flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed px-4 py-5 text-center transition ${
           disabled
             ? "border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed"
-            : "border-slate-200 text-slate-500 hover:border-brand-300 hover:bg-brand-50/40 cursor-pointer"
+            : "border-slate-200 text-slate-500 hover:border-brand-400 hover:bg-brand-50/40 cursor-pointer"
         }`}
       >
         <Upload size={18} />

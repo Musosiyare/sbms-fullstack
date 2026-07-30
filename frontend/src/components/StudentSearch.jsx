@@ -11,6 +11,10 @@ import { searchStudents } from "../api/sbms";
  *
  * Deliberately self-contained: Layout only needs to pass `onSelect`, so
  * this can't accidentally couple to whatever page happens to be mounted.
+ *
+ * Rendered as a normal, always-visible search field in the header (not
+ * collapsed behind an icon) so it reads as a first-class piece of the
+ * toolbar rather than something hidden away.
  */
 export default function StudentSearch({ onSelect }) {
   const [query, setQuery] = useState("");
@@ -21,12 +25,15 @@ export default function StudentSearch({ onSelect }) {
   const [loading, setLoading] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const rootRef = useRef(null);
+  const inputRef = useRef(null);
   const debounceRef = useRef(null);
   const requestIdRef = useRef(0);
 
   useEffect(() => {
     function onClickOutside(e) {
-      if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false);
+      if (rootRef.current && !rootRef.current.contains(e.target)) {
+        setOpen(false);
+      }
     }
     document.addEventListener("mousedown", onClickOutside);
     return () => document.removeEventListener("mousedown", onClickOutside);
@@ -86,16 +93,27 @@ export default function StudentSearch({ onSelect }) {
       pick(results[activeIndex]);
     } else if (e.key === "Escape") {
       setOpen(false);
+      inputRef.current?.blur();
     }
   }
 
   const showDropdown = open && query.trim().length >= 2;
 
   return (
-    <div ref={rootRef} className="relative w-full max-w-md lg:max-w-xl">
-      <div className="relative">
-        <Search size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+    <div ref={rootRef} className="relative w-full sm:w-72">
+      <div
+        className={`relative flex items-center rounded-xl border bg-slate-50 shadow-sm transition-all ${
+          open ? "border-brand-400 bg-white" : "border-slate-200 hover:border-slate-300"
+        }`}
+      >
+        <Search
+          size={16}
+          className={`pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 transition-colors ${
+            open ? "text-brand-400" : "text-slate-400"
+          }`}
+        />
         <input
+          ref={inputRef}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -104,31 +122,32 @@ export default function StudentSearch({ onSelect }) {
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
           type="text"
-          placeholder="Search students by name or admission number…"
-          className="w-full rounded-full border border-slate-200 bg-slate-50 py-3 pl-11 pr-10 text-base text-slate-700 placeholder:text-slate-400 focus:border-brand-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-100 transition-colors"
+          placeholder="Search students by name or admission no…"
+          className="form-field w-full min-w-0 rounded-xl bg-transparent py-2.5 pl-10 pr-8 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none"
         />
         {query && (
           <button
             onClick={() => {
               setQuery("");
               setResults([]);
+              inputRef.current?.focus();
             }}
-            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
           >
-            <X size={17} />
+            <X size={15} />
           </button>
         )}
       </div>
 
       {showDropdown && (
-        <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-40 max-h-[28rem] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl">
+        <div className="absolute left-0 top-[calc(100%+8px)] z-40 w-full sm:w-[22rem] max-w-[90vw] max-h-80 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
           {loading && results.length === 0 && (
-            <div className="flex items-center gap-2.5 px-5 py-4 text-sm text-slate-400">
-              <Loader2 size={16} className="animate-spin" /> Searching…
+            <div className="flex items-center gap-2 px-3.5 py-3 text-xs text-slate-400">
+              <Loader2 size={14} className="animate-spin" /> Searching…
             </div>
           )}
           {!loading && results.length === 0 && (
-            <p className="px-5 py-4 text-sm text-slate-400">No students found for "{query.trim()}".</p>
+            <p className="px-3.5 py-3 text-xs text-slate-400">No students found for "{query.trim()}".</p>
           )}
           {results.map((s, idx) => (
             <button
@@ -137,47 +156,47 @@ export default function StudentSearch({ onSelect }) {
               onMouseEnter={() => setActiveIndex(idx)}
               disabled={!academicYearId || hasLockedTerm}
               title={hasLockedTerm ? "Available once every term for this year is unlocked" : undefined}
-              className={`flex w-full items-center gap-3.5 px-5 py-3.5 text-left transition-colors ${
+              className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors ${
                 idx === activeIndex ? "bg-brand-50" : "hover:bg-slate-50"
               } ${!academicYearId || hasLockedTerm ? "opacity-60 cursor-not-allowed" : ""} ${
                 idx !== results.length - 1 ? "border-b border-slate-50" : ""
               }`}
             >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-500">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-500">
                 {s.firstName?.[0]?.toUpperCase()}
                 {s.lastName?.[0]?.toUpperCase()}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-base font-medium text-slate-800">
+                <p className="truncate text-sm font-medium text-slate-800">
                   {s.firstName} {s.lastName}
                 </p>
-                <p className="truncate text-sm text-slate-400">
+                <p className="truncate text-xs text-slate-400">
                   {s.class?.name || "No class"}
                   {s.admissionNumber ? ` · #${s.admissionNumber}` : ""}
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-2.5">
+              <div className="flex shrink-0 items-center gap-1.5">
                 {s.conduct && (
                   <span
-                    className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold ${
+                    className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                       s.conduct.atRisk ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"
                     }`}
                   >
                     {s.conduct.remaining}/{s.conduct.maxMarks}
                   </span>
                 )}
-                <ChevronRight size={16} className="text-slate-300" />
+                <ChevronRight size={14} className="text-slate-300" />
               </div>
             </button>
           ))}
           {!loading && results.length > 0 && !academicYearId && (
-            <p className="border-t border-slate-100 px-5 py-2.5 text-xs text-slate-400">
+            <p className="border-t border-slate-100 px-3.5 py-2 text-[11px] text-slate-400">
               Set a current academic year to open student reports.
             </p>
           )}
           {!loading && results.length > 0 && academicYearId && hasLockedTerm && (
-            <p className="flex items-center gap-1.5 border-t border-slate-100 px-5 py-2.5 text-xs text-amber-600">
-              <Lock size={12} className="shrink-0" />
+            <p className="flex items-center gap-1.5 border-t border-slate-100 px-3.5 py-2 text-[11px] text-amber-600">
+              <Lock size={11} className="shrink-0" />
               {lockedTerms.join(", ")} {lockedTerms.length > 1 ? "are" : "is"} locked in the reporting system —
               reports open once every term this year is unlocked.
             </p>

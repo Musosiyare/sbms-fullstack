@@ -8,6 +8,7 @@ import { Field, Input, Select, Textarea } from "../components/ui/FormField";
 import { ErrorText } from "../components/ui/Alerts";
 import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
 import { useConfirm } from "../components/ui/ConfirmProvider";
+import { useAuth } from "../context/AuthContext";
 import PillSelect from "../components/ui/PillSelect";
 import { getMisconductTypes, createMisconductType, updateMisconductType, deleteMisconductType } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
@@ -21,6 +22,8 @@ const DEDUCTION_TONE = {
 };
 
 export default function MisconductTypes() {
+  const { user } = useAuth();
+  const canManage = user?.sbmsRole === "dean_of_discipline";
   const confirm = useConfirm();
   const [types, setTypes] = useState(null);
   const [editing, setEditing] = useState(null); // type being edited, or {} for new
@@ -61,9 +64,11 @@ export default function MisconductTypes() {
     <Card
       title="Misconduct types"
       actions={
-        <Button onClick={() => setEditing({})}>
-          <Plus size={15} /> Add type
-        </Button>
+        canManage && (
+          <Button onClick={() => setEditing({})}>
+            <Plus size={15} /> Add type
+          </Button>
+        )
       }
     >
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
@@ -73,7 +78,7 @@ export default function MisconductTypes() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search misconduct types..."
-            className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-brand-400 focus:bg-white focus:ring-4 focus:ring-brand-100"
+            className="form-field w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 shadow-sm outline-none transition-all hover:border-slate-300 focus:border-brand-400 focus:bg-white"
           />
         </div>
         <PillSelect
@@ -95,14 +100,14 @@ export default function MisconductTypes() {
             <Th>Severity</Th>
             <Th>Default deduction</Th>
             <Th>Scope</Th>
-            <Th></Th>
+            {canManage && <Th></Th>}
           </tr>
         </Thead>
         <tbody>
           {types === null ? (
-            <EmptyRow colSpan={5}>Loading...</EmptyRow>
+            <EmptyRow colSpan={canManage ? 5 : 4}>Loading...</EmptyRow>
           ) : filteredTypes.length === 0 ? (
-            <EmptyRow colSpan={5}>{search || severityFilter ? "No matches for your filters." : ""}</EmptyRow>
+            <EmptyRow colSpan={canManage ? 5 : 4}>{search || severityFilter ? "No matches for your filters." : ""}</EmptyRow>
           ) : (
             filteredTypes.map((t) => (
               <tr key={t.id}>
@@ -128,16 +133,18 @@ export default function MisconductTypes() {
                   </span>
                 </Td>
                 <Td>{t.schoolId ? t.School?.name || "This school" : "Global template"}</Td>
-                <Td>
-                  <div className="flex gap-2">
-                    <button onClick={() => setEditing(t)} className="text-brand-500 hover:text-brand-700" aria-label="Edit">
-                      <Pencil size={15} />
-                    </button>
-                    <button onClick={() => handleDelete(t)} className="text-red-500 hover:text-red-700" aria-label="Disable">
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-                </Td>
+                {canManage && (
+                  <Td>
+                    <div className="flex gap-2">
+                      <button onClick={() => setEditing(t)} className="text-brand-500 hover:text-brand-700" aria-label="Edit">
+                        <Pencil size={15} />
+                      </button>
+                      <button onClick={() => handleDelete(t)} className="text-red-500 hover:text-red-700" aria-label="Disable">
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </Td>
+                )}
               </tr>
             ))
           )}

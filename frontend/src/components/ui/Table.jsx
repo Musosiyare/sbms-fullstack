@@ -1,7 +1,7 @@
-export function Table({ children }) {
+export function Table({ children, className = "", wrapperClassName = "" }) {
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200">
-      <table className="w-full text-sm">{children}</table>
+    <div className={`overflow-x-auto rounded-lg border border-slate-200 ${wrapperClassName}`}>
+      <table className={`w-full text-sm ${className}`}>{children}</table>
     </div>
   );
 }

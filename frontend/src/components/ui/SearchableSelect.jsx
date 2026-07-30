@@ -116,7 +116,7 @@ export default function SearchableSelect({
           disabled={disabled}
           onClick={openDropdown}
           onKeyDown={handleKeyDown}
-          className="form-field w-full flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm text-left outline-none transition focus:border-brand-400 focus:bg-white focus:ring-4 focus:ring-brand-100 disabled:opacity-60 disabled:cursor-not-allowed"
+          className="form-field w-full flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm text-left shadow-sm outline-none transition-all hover:border-slate-300 focus:border-brand-400 focus:bg-white disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <span className={`truncate ${selected ? "text-slate-800" : "text-slate-400"}`}>
             {selected ? selected.label : placeholder}
@@ -135,7 +135,7 @@ export default function SearchableSelect({
             }}
             onKeyDown={handleKeyDown}
             placeholder={selected ? selected.label : placeholder}
-            className="w-full rounded-xl border border-brand-400 bg-white pl-9 pr-3.5 py-2.5 text-sm text-slate-800 outline-none ring-4 ring-brand-100"
+            className="form-field w-full rounded-xl border border-brand-400 bg-white pl-9 pr-3.5 py-2.5 text-sm text-slate-800 shadow-sm outline-none"
           />
         </div>
       )}

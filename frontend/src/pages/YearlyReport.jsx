@@ -3,7 +3,7 @@ import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
 import { FileText, Download, List, Lock } from "lucide-react";
 import { toast } from "sonner";
-import { Field, Select } from "../components/ui/FormField";
+import PillSelect, { ScopeBar, ScopeGroup } from "../components/ui/PillSelect";
 import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
 import { useScopePicker } from "../hooks/useScopePicker";
 import { getClassYearlyConductReport } from "../api/sbms";
@@ -102,28 +102,24 @@ export default function YearlyReport() {
         </div>
       }
     >
-      <div className="grid sm:grid-cols-2 gap-4 mb-6">
-        <Field label="Academic year">
-          <Select value={scope.academicYearId} onChange={(e) => scope.setAcademicYearId(e.target.value)}>
-            <option value="">Select...</option>
-            {scope.academicYears.map((y) => (
-              <option key={y.id} value={y.id}>
-                {y.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Class">
-          <Select value={scope.classId} onChange={(e) => scope.setClassId(e.target.value)} disabled={!scope.classes.length}>
-            <option value="">Select...</option>
-            {scope.classes.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      </div>
+      <ScopeBar>
+        <ScopeGroup label="Academic year">
+          <PillSelect
+            options={scope.academicYears.map((y) => ({ id: y.id, label: y.name }))}
+            value={scope.academicYearId}
+            onChange={scope.setAcademicYearId}
+            emptyLabel="No academic years yet"
+          />
+        </ScopeGroup>
+        <ScopeGroup label="Class">
+          <PillSelect
+            options={scope.classes.map((c) => ({ id: c.id, label: c.name }))}
+            value={scope.classId}
+            onChange={scope.setClassId}
+            emptyLabel="Pick a year first"
+          />
+        </ScopeGroup>
+      </ScopeBar>
 
       {scope.classId && scope.academicYearId && scope.terms.length > 0 && !allTermsOpen && (
         <p className="flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-700 mb-6">
@@ -137,41 +133,37 @@ export default function YearlyReport() {
         </p>
       )}
 
-      <Table>
+      <Table className="table-fixed min-w-[680px]">
         <Thead>
           <tr>
-            <Th>Admission No.</Th>
-            <Th>Student</Th>
-            <Th>Guardian name</Th>
-            <Th className="text-center">Remaining</Th>
-            <Th className="text-center">Decision</Th>
-            <Th className="text-right">Report</Th>
+            <Th className="w-[16%]">Admission No.</Th>
+            <Th className="w-[32%]">Student</Th>
+            <Th className="w-[15%] text-center">
+              Remaining /{data?.students?.[0]?.year.maxMarks ?? 120}
+            </Th>
+            <Th className="w-[15%] text-center">Decision</Th>
+            <Th className="w-[22%] text-right">Report</Th>
           </tr>
         </Thead>
         <tbody>
           {!scope.classId || !scope.academicYearId ? (
-            <EmptyRow colSpan={6}>Pick an academic year and class above.</EmptyRow>
+            <EmptyRow colSpan={5}>Pick an academic year and class above.</EmptyRow>
           ) : data === null ? (
-            <EmptyRow colSpan={6}>Loading...</EmptyRow>
+            <EmptyRow colSpan={5}>Loading...</EmptyRow>
           ) : data.students.length === 0 ? (
-            <EmptyRow colSpan={6}>No students in this class.</EmptyRow>
+            <EmptyRow colSpan={5}>No students in this class.</EmptyRow>
           ) : (
             data.students.map((s) => {
               const promoted = s.year.decision === "promoted";
               return (
                 <tr key={s.studentId}>
                   <Td>
-                    <span className="font-accent font-semibold text-base text-brand-500">
-                      {s.admissionNumber || "—"}
-                    </span>
+                    <span className="font-bold text-slate-800">{s.admissionNumber || "—"}</span>
                   </Td>
                   <Td className="font-medium text-slate-800">
                     {s.firstName} {s.lastName}
                   </Td>
-                  <Td className="text-slate-600">{s.guardianName || "—"}</Td>
-                  <Td className="text-center tabular-nums text-slate-600">
-                    {s.year.remaining} / {s.year.maxMarks}
-                  </Td>
+                  <Td className="text-center font-bold tabular-nums text-slate-800">{s.year.remaining}</Td>
                   <Td className="text-center">
                     <span
                       className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${

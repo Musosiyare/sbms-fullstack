@@ -827,11 +827,13 @@ export default function Dashboard() {
   const termLabel = selectedTerm && selectedYear ? `${selectedTerm.name}, ${selectedYear.name}` : null;
 
   return (
-    <div>
-      <p className="text-slate-600 mb-6">Welcome back, {user.name?.split(" ")[0]}.</p>
+    <div className="flex flex-col gap-5">
+      <div>
+        <p className="text-slate-600">Welcome back, {user.name?.split(" ")[0]}.</p>
+      </div>
 
       {(showOverview || showMyReports) && (
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 mb-6">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-2">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-slate-400 shrink-0">Year</span>
             <PillSelect
@@ -871,52 +873,55 @@ export default function Dashboard() {
         />
       )}
 
-      <div className="grid sm:grid-cols-2 gap-4">
-        {["manager", "disciplinary_officer", "reporter"].includes(user.sbmsRole) && (
-          <QuickAction
-            to="/report"
-            icon={FlagTriangleRight}
-            title="Report a mistake"
-            description="Flag an incident you witnessed for the discipline office."
-            tone="reporter"
-          />
-        )}
-        {["manager", "dean_of_discipline", "disciplinary_officer"].includes(user.sbmsRole) && (
-          <QuickAction
-            to="/records"
-            icon={ClipboardList}
-            title="Records"
-            description="Review pending reports and browse finalized records."
-            tone="brand"
-          />
-        )}
-        {["manager", "dean_of_discipline", "disciplinary_officer"].includes(user.sbmsRole) && (
-          <QuickAction
-            to="/class-report"
-            icon={BarChart3}
-            title="Class report"
-            description="Termly and yearly conduct scores for a class."
-            tone="brand"
-          />
-        )}
-        {["dean_of_discipline"].includes(user.sbmsRole) && (
-          <QuickAction
-            to="/misconduct-types"
-            icon={ListChecks}
-            title="Misconduct types"
-            description="Manage the catalog of offenses and default deductions."
-            tone="brand"
-          />
-        )}
-        {["dean_of_discipline", "manager", "disciplinary_officer"].includes(user.sbmsRole) && (
-          <QuickAction
-            to="/staff-roles"
-            icon={UserCog}
-            title="Staff roles"
-            description="Assign Dean of Discipline and Disciplinary Officer access."
-            tone="brand"
-          />
-        )}
+      <div>
+        <p className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Quick actions</p>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {["manager", "disciplinary_officer", "reporter"].includes(user.sbmsRole) && (
+            <QuickAction
+              to="/report"
+              icon={FlagTriangleRight}
+              title="Report a mistake"
+              description="Flag an incident for the discipline office."
+              tone="reporter"
+            />
+          )}
+          {["manager", "dean_of_discipline", "disciplinary_officer"].includes(user.sbmsRole) && (
+            <QuickAction
+              to="/records"
+              icon={ClipboardList}
+              title="Records"
+              description="Pending reports and finalized records."
+              tone="brand"
+            />
+          )}
+          {["manager", "dean_of_discipline", "disciplinary_officer"].includes(user.sbmsRole) && (
+            <QuickAction
+              to="/class-report"
+              icon={BarChart3}
+              title="Class report"
+              description="Termly and yearly conduct scores."
+              tone="brand"
+            />
+          )}
+          {["dean_of_discipline"].includes(user.sbmsRole) && (
+            <QuickAction
+              to="/misconduct-types"
+              icon={ListChecks}
+              title="Misconduct types"
+              description="Catalog of offenses and default deductions."
+              tone="brand"
+            />
+          )}
+          {["dean_of_discipline", "manager", "disciplinary_officer"].includes(user.sbmsRole) && (
+            <QuickAction
+              to="/staff-roles"
+              icon={UserCog}
+              title="Staff roles"
+              description="Assign Dean of Discipline and Officer access."
+              tone="brand"
+            />
+          )}
+        </div>
       </div>
     </div>
   );
@@ -926,7 +931,7 @@ function QuickAction({ to, icon: Icon, title, description }) {
   return (
     <Link
       to={to}
-      className="flex items-start gap-3 bg-white border border-slate-200 rounded-xl p-4 hover:border-brand-200 hover:shadow-sm transition"
+      className="flex items-start gap-3 bg-white border border-slate-200 rounded-xl p-3.5 hover:border-brand-200 hover:shadow-sm transition"
     >
       <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600 shrink-0">
         <Icon size={18} />

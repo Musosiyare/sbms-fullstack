@@ -101,7 +101,7 @@ export default function App() {
               <Route
                 path="/misconduct-types"
                 element={
-                  <ProtectedRoute roles={["dean_of_discipline"]}>
+                  <ProtectedRoute roles={["dean_of_discipline", "disciplinary_officer"]}>
                     <MisconductTypes />
                   </ProtectedRoute>
                 }

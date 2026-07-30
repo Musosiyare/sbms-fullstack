@@ -23,6 +23,10 @@ import {
   MessageCircle,
   PanelLeftClose,
   PanelLeftOpen,
+  Gavel,
+  FileBarChart,
+  Settings2,
+  ChevronDown,
 } from "lucide-react";
 
 const SIDEBAR_COLLAPSED_KEY = "sbms:sidebarCollapsed";
@@ -36,43 +40,121 @@ const ROLE_META = {
   reporter: { label: "Teacher", accent: "bg-reporter", text: "text-reporter", tint: "bg-teal-50 border-teal-100" },
 };
 
-const NAV = {
+// Every role gets the Dashboard pinned above the fold, then its remaining
+// links bucketed into up to 3 collapsible groups (Discipline / Reports /
+// Administration) so the sidebar reads as a handful of topics instead of
+// a long flat list. Groups a role has no links for are simply omitted.
+const PINNED = { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard };
+
+const NAV_GROUPS = {
   manager: [
-    { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { to: "/report", label: "Report a Mistake", icon: FlagTriangleRight },
-    { to: "/records", label: "Records", icon: ClipboardList },
-    { to: "/discussions", label: "Discussions", icon: MessageCircle },
-    { to: "/class-report", label: "Class Report", icon: BarChart3 },
-    { to: "/yearly-report", label: "Yearly Report", icon: GraduationCap },
-    { to: "/dismissed-students", label: "Dismissed Students", icon: UserX },
-    { to: "/staff-roles", label: "Staff Roles", icon: UserCog },
+    {
+      id: "discipline",
+      label: "Discipline",
+      icon: Gavel,
+      items: [
+        { to: "/report", label: "Report a Mistake", icon: FlagTriangleRight },
+        { to: "/records", label: "Records", icon: ClipboardList },
+        { to: "/discussions", label: "Discussions", icon: MessageCircle },
+      ],
+    },
+    {
+      id: "reports",
+      label: "Reports",
+      icon: FileBarChart,
+      items: [
+        { to: "/class-report", label: "Class Report", icon: BarChart3 },
+        { to: "/yearly-report", label: "Yearly Report", icon: GraduationCap },
+        { to: "/dismissed-students", label: "Dismissed Students", icon: UserX },
+      ],
+    },
+    {
+      id: "admin",
+      label: "Administration",
+      icon: Settings2,
+      items: [{ to: "/staff-roles", label: "Staff Roles", icon: UserCog }],
+    },
   ],
   dean_of_discipline: [
-    { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { to: "/records", label: "Records", icon: ClipboardList },
-    { to: "/discussions", label: "Discussions", icon: MessageCircle },
-    { to: "/class-report", label: "Class Report", icon: BarChart3 },
-    { to: "/yearly-report", label: "Yearly Report", icon: GraduationCap },
-    { to: "/dismissed-students", label: "Dismissed Students", icon: UserX },
-    { to: "/misconduct-types", label: "Misconduct Types", icon: ListChecks },
-    { to: "/staff-roles", label: "Staff Roles", icon: UserCog },
+    {
+      id: "discipline",
+      label: "Discipline",
+      icon: Gavel,
+      items: [
+        { to: "/records", label: "Records", icon: ClipboardList },
+        { to: "/discussions", label: "Discussions", icon: MessageCircle },
+      ],
+    },
+    {
+      id: "reports",
+      label: "Reports",
+      icon: FileBarChart,
+      items: [
+        { to: "/class-report", label: "Class Report", icon: BarChart3 },
+        { to: "/yearly-report", label: "Yearly Report", icon: GraduationCap },
+        { to: "/dismissed-students", label: "Dismissed Students", icon: UserX },
+      ],
+    },
+    {
+      id: "admin",
+      label: "Administration",
+      icon: Settings2,
+      items: [
+        { to: "/misconduct-types", label: "Misconduct Types", icon: ListChecks },
+        { to: "/staff-roles", label: "Staff Roles", icon: UserCog },
+      ],
+    },
   ],
   disciplinary_officer: [
-    { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { to: "/report", label: "Report a Mistake", icon: FlagTriangleRight },
-    { to: "/records", label: "Records", icon: ClipboardList },
-    { to: "/discussions", label: "Discussions", icon: MessageCircle },
-    { to: "/class-report", label: "Class Report", icon: BarChart3 },
-    { to: "/yearly-report", label: "Yearly Report", icon: GraduationCap },
-    { to: "/dismissed-students", label: "Dismissed Students", icon: UserX },
-    { to: "/staff-roles", label: "Staff Roles", icon: UserCog },
+    {
+      id: "discipline",
+      label: "Discipline",
+      icon: Gavel,
+      items: [
+        { to: "/report", label: "Report a Mistake", icon: FlagTriangleRight },
+        { to: "/records", label: "Records", icon: ClipboardList },
+        { to: "/discussions", label: "Discussions", icon: MessageCircle },
+      ],
+    },
+    {
+      id: "reports",
+      label: "Reports",
+      icon: FileBarChart,
+      items: [
+        { to: "/class-report", label: "Class Report", icon: BarChart3 },
+        { to: "/yearly-report", label: "Yearly Report", icon: GraduationCap },
+        { to: "/dismissed-students", label: "Dismissed Students", icon: UserX },
+      ],
+    },
+    {
+      id: "admin",
+      label: "Administration",
+      icon: Settings2,
+      items: [
+        { to: "/misconduct-types", label: "Misconduct Types", icon: ListChecks },
+        { to: "/staff-roles", label: "Staff Roles", icon: UserCog },
+      ],
+    },
   ],
   reporter: [
-    { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { to: "/report", label: "Report a Mistake", icon: FlagTriangleRight },
-    { to: "/discussions", label: "Discussions", icon: MessageCircle },
+    {
+      id: "discipline",
+      label: "Discipline",
+      icon: Gavel,
+      items: [
+        { to: "/report", label: "Report a Mistake", icon: FlagTriangleRight },
+        { to: "/discussions", label: "Discussions", icon: MessageCircle },
+      ],
+    },
   ],
 };
+
+// Flat fallback (pinned + every item, in order) — used for the icon-only
+// collapsed desktop rail, where accordion headers wouldn't have room to
+// show a label anyway.
+function flattenNav(groups) {
+  return [PINNED, ...groups.flatMap((g) => g.items)];
+}
 
 const PAGE_META = {
   "/dashboard": { title: "Dashboard", subtitle: "Here's what needs attention." },
@@ -101,6 +183,22 @@ export default function Layout({ children }) {
     }
   });
   const [searchPick, setSearchPick] = useState(null); // { studentId, academicYearId }
+  const groups = NAV_GROUPS[user?.sbmsRole] || NAV_GROUPS.reporter;
+  const [openGroups, setOpenGroups] = useState(() => {
+    // Start with whichever group contains the current page open, so
+    // landing on e.g. Class Report doesn't hide the very link you're on.
+    const activeGroup = groups.find((g) => g.items.some((i) => i.to === location.pathname));
+    return new Set(activeGroup ? [activeGroup.id] : [groups[0]?.id]);
+  });
+
+  function toggleGroup(id) {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   useEffect(() => {
     try {
@@ -113,7 +211,7 @@ export default function Layout({ children }) {
   if (!user || location.pathname === "/") return children;
 
   const meta = ROLE_META[user.sbmsRole] || ROLE_META.reporter;
-  const nav = NAV[user.sbmsRole] || NAV.reporter;
+  const nav = flattenNav(groups);
   const page = PAGE_META[location.pathname] || { title: "SBMS", subtitle: "" };
 
   async function handleLogout() {
@@ -130,27 +228,77 @@ export default function Layout({ children }) {
     navigate("/login");
   }
 
-  const NavLinks = ({ iconOnly = false }) => (
+  const NavItemLink = ({ to, label, icon: Icon, iconOnly, indent }) => {
+    const active = location.pathname === to;
+    return (
+      <Link
+        key={to}
+        to={to}
+        title={iconOnly ? label : undefined}
+        onClick={() => setMobileOpen(false)}
+        className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+          iconOnly ? "justify-center" : ""
+        } ${indent && !iconOnly ? "ml-2" : ""} ${
+          active ? `${meta.tint} ${meta.text} border` : "text-slate-600 hover:bg-slate-100"
+        }`}
+      >
+        <Icon size={17} className="shrink-0" />
+        {!iconOnly && label}
+      </Link>
+    );
+  };
+
+  // Icon-only collapsed rail: a flat list (pinned + everything), since
+  // there's no room for a group header/label to click on anyway.
+  const NavLinksCollapsed = () => (
     <nav className="flex flex-col gap-1 px-3">
-      {nav.map(({ to, label, icon: Icon }) => {
-        const active = location.pathname === to;
+      {nav.map((item) => (
+        <NavItemLink key={item.to} {...item} iconOnly />
+      ))}
+    </nav>
+  );
+
+  // Expanded sidebar / mobile drawer: Dashboard pinned up top, then each
+  // remaining group as a collapsible accordion section — click the group
+  // header to reveal/hide the links inside it.
+  const NavLinksGrouped = () => (
+    <nav className="flex flex-col gap-1 px-3">
+      <NavItemLink {...PINNED} />
+      <div className="my-2 border-t border-slate-100" />
+      {groups.map((group) => {
+        const isOpen = openGroups.has(group.id);
+        const GroupIcon = group.icon;
+        const groupHasActive = group.items.some((i) => i.to === location.pathname);
         return (
-          <Link
-            key={to}
-            to={to}
-            title={iconOnly ? label : undefined}
-            onClick={() => setMobileOpen(false)}
-            className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-              iconOnly ? "justify-center" : ""
-            } ${active ? `${meta.tint} ${meta.text} border` : "text-slate-600 hover:bg-slate-100"}`}
-          >
-            <Icon size={17} className="shrink-0" />
-            {!iconOnly && label}
-          </Link>
+          <div key={group.id}>
+            <button
+              type="button"
+              onClick={() => toggleGroup(group.id)}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${
+                groupHasActive ? "text-slate-800" : "text-slate-500"
+              } hover:bg-slate-100`}
+            >
+              <GroupIcon size={17} className="shrink-0" />
+              <span className="flex-1 text-left">{group.label}</span>
+              <ChevronDown
+                size={15}
+                className={`shrink-0 text-slate-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+            {isOpen && (
+              <div className="mt-1 flex flex-col gap-1">
+                {group.items.map((item) => (
+                  <NavItemLink key={item.to} {...item} indent />
+                ))}
+              </div>
+            )}
+          </div>
         );
       })}
     </nav>
   );
+
+  const NavLinks = ({ iconOnly = false }) => (iconOnly ? <NavLinksCollapsed /> : <NavLinksGrouped />);
 
   return (
     <div className="min-h-screen flex">
@@ -291,9 +439,11 @@ export default function Layout({ children }) {
             {page.subtitle && <p className="text-sm text-slate-500 truncate hidden sm:block">{page.subtitle}</p>}
           </div>
 
-          <div className="order-3 w-full lg:order-none lg:w-auto lg:flex-1 lg:ml-6 lg:max-w-2xl">
-            <StudentSearch onSelect={(studentId, academicYearId) => setSearchPick({ studentId, academicYearId })} />
-          </div>
+          {user.sbmsRole !== "reporter" && (
+            <div className="order-3 w-full lg:order-none lg:ml-6 lg:w-auto lg:flex-1 lg:max-w-sm">
+              <StudentSearch onSelect={(studentId, academicYearId) => setSearchPick({ studentId, academicYearId })} />
+            </div>
+          )}
 
           <div className="ml-auto flex items-center gap-3 shrink-0">
             <HeaderClock />

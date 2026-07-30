@@ -12,7 +12,7 @@ function formatDate(value) {
  * page).
  */
 export default function YearlyConductReportPaper({ report }) {
-  const { school, class: klass, academicYear, student, terms, year, deanOfDiscipline } = report;
+  const { school, class: klass, academicYear, student, terms, year, incidents, deanOfDiscipline } = report;
   const percent = Math.max(0, Math.round((year.remaining / year.maxMarks) * 100));
   const promoted = year.decision === "promoted";
 
@@ -81,6 +81,37 @@ export default function YearlyConductReportPaper({ report }) {
             </tr>
           </tbody>
         </table>
+
+        {/* Incidents summary */}
+        <div className="mb-6">
+          <p className="text-sm font-semibold mb-2">Incidents summary</p>
+          {incidents && incidents.length > 0 ? (
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-100">
+                  <th className="border border-slate-300 px-2.5 py-1.5 text-left">Incident</th>
+                  <th className="border border-slate-300 px-2.5 py-1.5 text-left w-24">Term</th>
+                  <th className="border border-slate-300 px-2.5 py-1.5 text-left w-24">Date</th>
+                  <th className="border border-slate-300 px-2.5 py-1.5 text-center w-20">Marks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {incidents.map((i) => (
+                  <tr key={i.id}>
+                    <td className="border border-slate-300 px-2.5 py-1.5">{i.title}</td>
+                    <td className="border border-slate-300 px-2.5 py-1.5">{i.termName}</td>
+                    <td className="border border-slate-300 px-2.5 py-1.5">{formatDate(i.date)}</td>
+                    <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums">
+                      -{i.marksDeducted}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="text-xs text-slate-500">No finalized incidents this year.</p>
+          )}
+        </div>
 
         {/* Decision */}
         <div className="border-2 border-slate-800 rounded-md p-4 mb-8">

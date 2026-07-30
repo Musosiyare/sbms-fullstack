@@ -237,7 +237,7 @@ async function studentYearlyConductReport(req, res, next) {
       order: [["id", "ASC"]],
     });
 
-    const { terms, year } = await conductScoreService.getYearlyReport(student.id, academicYearId);
+    const { terms, year, incidents } = await conductScoreService.getYearlyReport(student.id, academicYearId);
 
     res.json({
       school: { id: school.id, name: school.name },
@@ -253,6 +253,7 @@ async function studentYearlyConductReport(req, res, next) {
       },
       terms,
       year,
+      incidents,
       deanOfDiscipline: dean ? { name: dean.name, email: dean.email } : null,
       generatedAt: new Date().toISOString(),
     });

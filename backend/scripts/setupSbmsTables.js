@@ -42,7 +42,7 @@ async function setup() {
 
     console.log("Done. SBMS's own tables are set up — nothing else was touched.");
     console.log(
-      "Reminder: to assign a Dean of Discipline / Disciplinary Officer, use the main system's Teachers page — not this app."
+      "Reminder: to assign a Dean of Discipline / Disciplinary Officer, use the main system's Discipline Staff page — not this app."
     );
     process.exit(0);
   } catch (err) {

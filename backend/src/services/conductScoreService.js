@@ -66,6 +66,29 @@ async function getYearScore(studentId, academicYearId) {
 }
 
 /**
+ * The finalized incidents behind a student's yearly score, one row per
+ * record — title, which term it fell in, the date it was finalized (marks
+ * actually applied), and how many marks it cost. Only 'finalized' records,
+ * same as the score sums above, so this always reconciles with the
+ * per-term/yearly totals on the same report.
+ */
+async function getYearlyIncidents(studentId, academicYearId) {
+  const { MisconductType } = require("../models");
+  const records = await MisconductRecord.findAll({
+    where: { studentId, academicYearId, status: "finalized" },
+    include: [{ model: MisconductType }, { model: Term }],
+    order: [["finalizedAt", "ASC"], ["createdAt", "ASC"]],
+  });
+  return records.map((r) => ({
+    id: r.id,
+    title: r.MisconductType?.title || r.customTitle || "Misconduct",
+    termName: r.Term?.name || "",
+    date: r.finalizedAt || r.createdAt,
+    marksDeducted: r.marksDeducted,
+  }));
+}
+
+/**
  * The full yearly picture for one student: every term in the academic year
  * with its own score, plus the combined yearly total and the promotion/
  * dismissal decision. Powers the printable yearly conduct report — Theo's
@@ -77,7 +100,8 @@ async function getYearlyReport(studentId, academicYearId) {
     terms.map(async (term) => ({ termId: term.id, termName: term.name, ...(await getTermScore(studentId, term.id)) }))
   );
   const year = await getYearScore(studentId, academicYearId);
-  return { terms: termScores, year };
+  const incidents = await getYearlyIncidents(studentId, academicYearId);
+  return { terms: termScores, year, incidents };
 }
 
 /**

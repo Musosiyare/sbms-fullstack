@@ -1,6 +1,30 @@
 import { Lock } from "lucide-react";
 
 /**
+ * ScopeBar + ScopeGroup: lay out a row of scope pickers (e.g. Academic
+ * year / Term / Class) as separate, self-contained boxes — each with its
+ * own label, background, and border — so the three choices stay clearly
+ * separated no matter how many pills each group has or how the boxes
+ * wrap on a narrow screen. (An earlier version used a plain vertical
+ * divider line between groups, but that line only made sense when every
+ * group's pills stayed on one row — as soon as a group's pills wrapped
+ * onto a second line, the divider no longer lined up with anything and
+ * the groups visually ran back into each other.)
+ */
+export function ScopeGroup({ label, children }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+      <span className="mb-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+export function ScopeBar({ children }) {
+  return <div className="flex flex-wrap items-start gap-3 mb-6">{children}</div>;
+}
+
+/**
  * Compact row of tap/click pills — used in place of a <Select> for quick
  * toggles like "which term am I looking at" where there are only a
  * handful of options and switching between them should feel like
@@ -10,7 +34,10 @@ import { Lock } from "lucide-react";
  * greyed out with a lock icon and can't be selected (mirrors
  * TermLockBadge's meaning elsewhere in the app).
  */
-export default function PillSelect({ options, value, onChange }) {
+export default function PillSelect({ options, value, onChange, emptyLabel = "Nothing to pick yet" }) {
+  if (!options.length) {
+    return <p className="py-1.5 text-xs text-slate-400">{emptyLabel}</p>;
+  }
   return (
     <div className="flex flex-wrap gap-1.5">
       {options.map((opt) => {
