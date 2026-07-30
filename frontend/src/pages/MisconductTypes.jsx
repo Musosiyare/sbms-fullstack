@@ -8,9 +8,10 @@ import { Field, Input, Select, Textarea } from "../components/ui/FormField";
 import { ErrorText } from "../components/ui/Alerts";
 import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
 import { useConfirm } from "../components/ui/ConfirmProvider";
+import PillSelect from "../components/ui/PillSelect";
 import { getMisconductTypes, createMisconductType, updateMisconductType, deleteMisconductType } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Search } from "lucide-react";
 
 const SEVERITY_TONE = { minor: "neutral", moderate: "warning", severe: "danger" };
 const DEDUCTION_TONE = {
@@ -23,12 +24,21 @@ export default function MisconductTypes() {
   const confirm = useConfirm();
   const [types, setTypes] = useState(null);
   const [editing, setEditing] = useState(null); // type being edited, or {} for new
+  const [search, setSearch] = useState("");
+  const [severityFilter, setSeverityFilter] = useState(""); // "" = all
 
   function refresh() {
     getMisconductTypes().then(setTypes);
   }
 
   useEffect(refresh, []);
+
+  const filteredTypes = (types || []).filter((t) => {
+    if (severityFilter && t.severity !== severityFilter) return false;
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return t.title.toLowerCase().includes(q) || (t.description || "").toLowerCase().includes(q);
+  });
 
   async function handleDelete(type) {
     const ok = await confirm({
@@ -56,6 +66,28 @@ export default function MisconductTypes() {
         </Button>
       }
     >
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+        <div className="relative max-w-sm w-full">
+          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search misconduct types..."
+            className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-brand-400 focus:bg-white focus:ring-4 focus:ring-brand-100"
+          />
+        </div>
+        <PillSelect
+          options={[
+            { id: "", label: `All (${(types || []).length})` },
+            { id: "severe", label: `Severe (${(types || []).filter((t) => t.severity === "severe").length})` },
+            { id: "moderate", label: `Moderate (${(types || []).filter((t) => t.severity === "moderate").length})` },
+            { id: "minor", label: `Minor (${(types || []).filter((t) => t.severity === "minor").length})` },
+          ]}
+          value={severityFilter}
+          onChange={setSeverityFilter}
+        />
+      </div>
+
       <Table>
         <Thead>
           <tr>
@@ -69,10 +101,10 @@ export default function MisconductTypes() {
         <tbody>
           {types === null ? (
             <EmptyRow colSpan={5}>Loading...</EmptyRow>
-          ) : types.length === 0 ? (
-            <EmptyRow colSpan={5} />
+          ) : filteredTypes.length === 0 ? (
+            <EmptyRow colSpan={5}>{search || severityFilter ? "No matches for your filters." : ""}</EmptyRow>
           ) : (
-            types.map((t) => (
+            filteredTypes.map((t) => (
               <tr key={t.id}>
                 <Td>
                   <p className="font-medium text-slate-800">{capitalizeFirst(t.title)}</p>
@@ -98,10 +130,10 @@ export default function MisconductTypes() {
                 <Td>{t.schoolId ? t.School?.name || "This school" : "Global template"}</Td>
                 <Td>
                   <div className="flex gap-2">
-                    <button onClick={() => setEditing(t)} className="text-slate-400 hover:text-brand-600" aria-label="Edit">
+                    <button onClick={() => setEditing(t)} className="text-brand-500 hover:text-brand-700" aria-label="Edit">
                       <Pencil size={15} />
                     </button>
-                    <button onClick={() => handleDelete(t)} className="text-slate-400 hover:text-red-600" aria-label="Disable">
+                    <button onClick={() => handleDelete(t)} className="text-red-500 hover:text-red-700" aria-label="Disable">
                       <Trash2 size={15} />
                     </button>
                   </div>

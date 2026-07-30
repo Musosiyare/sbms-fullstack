@@ -11,6 +11,8 @@ import { ErrorText, NotCurrentYearNotice } from "../components/ui/Alerts";
 import EvidenceList from "../components/ui/EvidenceList";
 import EvidenceUpload, { EvidenceFieldLabel } from "../components/ui/EvidenceUpload";
 import { useConfirm } from "../components/ui/ConfirmProvider";
+import SearchableSelect from "../components/ui/SearchableSelect";
+import { buildMisconductOptions } from "../utils/misconductOptions";
 import { useScopePicker } from "../hooks/useScopePicker";
 import PillSelect from "../components/ui/PillSelect";
 import {
@@ -429,14 +431,13 @@ function MyReportDetailModal({ record, currentUser, onClose, onEvidenceChange, o
         {editing ? (
           <div className="flex flex-col gap-3 mt-1">
             <Field label="Incident">
-              <Select value={misconductTypeId} onChange={(e) => setMisconductTypeId(e.target.value)} disabled={!types}>
-                <option value="">{types ? "Select..." : "Loading..."}</option>
-                {types?.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {capitalizeFirst(t.title)} (-{t.defaultDeduction})
-                  </option>
-                ))}
-              </Select>
+              <SearchableSelect
+                options={buildMisconductOptions(types)}
+                value={misconductTypeId}
+                onChange={setMisconductTypeId}
+                disabled={!types}
+                placeholder={types ? "Search incident types..." : "Loading..."}
+              />
             </Field>
             <Field label="Additional notes (optional)">
               <Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
@@ -725,7 +726,14 @@ function DeliberationModal({ student, termId, academicYearId, isCurrentAcademicY
     }
     const ok = await confirm({
       title: "Undo this decision?",
-      message: `${student.firstName} ${student.lastName} will go back to "awaiting decision" for this term.`,
+      message: (
+        <>
+          <strong className="font-semibold text-black">
+            {student.firstName} {student.lastName}
+          </strong>{" "}
+          will go back to "awaiting decision" for this term.
+        </>
+      ),
       confirmText: "Undo",
       tone: "danger",
     });

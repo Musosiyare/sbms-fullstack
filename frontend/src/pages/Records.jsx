@@ -12,6 +12,9 @@ import EvidenceUpload, { EvidenceFieldLabel } from "../components/ui/EvidenceUpl
 import EvidenceList from "../components/ui/EvidenceList";
 import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
 import Pagination from "../components/ui/Pagination";
+import { useConfirm } from "../components/ui/ConfirmProvider";
+import SearchableSelect from "../components/ui/SearchableSelect";
+import { buildMisconductOptions } from "../utils/misconductOptions";
 import { useScopePicker } from "../hooks/useScopePicker";
 import {
   listRecords,
@@ -1124,6 +1127,7 @@ function groupRecordsByTerm(records, termLabels) {
  */
 function ApproveModal({ record, onClose, onDone }) {
   const { user } = useAuth();
+  const confirm = useConfirm();
   const requiresSendHome = record.MisconductType?.requiresSendHome;
   const officerBlocked = user.sbmsRole === "disciplinary_officer" && requiresSendHome;
   const defaultRange = requiresSendHome ? computeSendHomeRange(record.MisconductType) : { from: "", to: "" };
@@ -1139,6 +1143,21 @@ function ApproveModal({ record, onClose, onDone }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
+    const ok = await confirm({
+      title: "Confirm mark deduction",
+      message: (
+        <>
+          This will approve the report on{" "}
+          <strong className="font-semibold text-black">{studentName.trim()}</strong> and deduct {deduction}{" "}
+          mark{deduction === 1 ? "" : "s"} from them for "
+          {capitalizeFirst(record.MisconductType?.title) || record.customTitle || "this incident"}". Once approved,
+          this can't be undone. Deduct the marks?
+        </>
+      ),
+      confirmText: `Yes, deduct ${deduction} mark${deduction === 1 ? "" : "s"}`,
+      tone: "danger",
+    });
+    if (!ok) return;
     setSubmitting(true);
     try {
       const result = await approveRecord(record.id, {
@@ -1352,6 +1371,7 @@ function RejectModal({ record, onClose, onDone }) {
  */
 function BulkApproveModal({ ids, records, onClose, onDone }) {
   const { user } = useAuth();
+  const confirm = useConfirm();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null); // { approved, failed } once submitted
@@ -1364,6 +1384,15 @@ function BulkApproveModal({ ids, records, onClose, onDone }) {
 
   async function handleConfirm() {
     setError("");
+    const ok = await confirm({
+      title: "Confirm bulk approval",
+      message: `This will approve ${approvableIds.length} report${
+        approvableIds.length === 1 ? "" : "s"
+      } and deduct marks from each student involved, using each incident's own default deduction. This can't be undone. Approve and deduct marks now?`,
+      confirmText: `Yes, approve ${approvableIds.length}`,
+      tone: "danger",
+    });
+    if (!ok) return;
     setSubmitting(true);
     try {
       const res = await bulkApproveRecords(approvableIds);
@@ -1566,6 +1595,7 @@ const MAX_TERM_MARKS = 40;
 
 function ClassDeductModal({ types, onClose, onDone }) {
   const scope = useScopePicker();
+  const confirm = useConfirm();
   const [misconductTypeId, setMisconductTypeId] = useState("");
   const [customTitle, setCustomTitle] = useState("");
   const [marksDeducted, setMarksDeducted] = useState("");
@@ -1635,6 +1665,20 @@ function ClassDeductModal({ types, onClose, onDone }) {
       setError("Every student in this class is excluded — nobody would receive this deduction.");
       return;
     }
+
+    const className = scope.classes.find((c) => String(c.id) === String(scope.classId))?.name || "this class";
+    const incidentTitle = useCustom ? customTitle.trim() : selectedType?.title || "this incident";
+    const ok = await confirm({
+      title: "Confirm class-wide deduction",
+      message: `This will deduct ${marksDeducted} mark${
+        Number(marksDeducted) === 1 ? "" : "s"
+      } from ${targetCount} student${targetCount === 1 ? "" : "s"} in ${className} for "${incidentTitle}". It applies immediately with no review step and can't be undone. Apply this to ${targetCount} student${
+        targetCount === 1 ? "" : "s"
+      } now?`,
+      confirmText: `Yes, deduct from ${targetCount}`,
+      tone: "danger",
+    });
+    if (!ok) return;
 
     setSubmitting(true);
     try {
@@ -1762,16 +1806,13 @@ function ClassDeductModal({ types, onClose, onDone }) {
           </Field>
         ) : (
           <Field label="Misconduct type">
-            <Select value={misconductTypeId} onChange={(e) => handleTypeChange(e.target.value)} disabled={!scope.isCurrentAcademicYear}>
-              <option value="">Select...</option>
-              {types
-                .filter((t) => !t.requiresSendHome)
-                .map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.title} (-{t.defaultDeduction})
-                  </option>
-                ))}
-            </Select>
+            <SearchableSelect
+              options={buildMisconductOptions(types.filter((t) => !t.requiresSendHome))}
+              value={misconductTypeId}
+              onChange={handleTypeChange}
+              disabled={!scope.isCurrentAcademicYear}
+              placeholder="Search incident types..."
+            />
             <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-600">
               <Info size={14} className="shrink-0 mt-0.5" />
               <span>
@@ -1873,6 +1914,7 @@ function ClassDeductModal({ types, onClose, onDone }) {
 function NewRecordModal({ types, onClose, onDone }) {
   const { user } = useAuth();
   const scope = useScopePicker();
+  const confirm = useConfirm();
   const [misconductTypeId, setMisconductTypeId] = useState("");
   const [customTitle, setCustomTitle] = useState("");
   const [marksDeducted, setMarksDeducted] = useState("");
@@ -1982,6 +2024,23 @@ function NewRecordModal({ types, onClose, onDone }) {
     // Whether this exceeds the term's total conduct marks is checked and
     // enforced by the backend, not here — its error message is shown
     // above if it rejects it.
+
+    const studentName = scope.students.find((s) => String(s.id) === String(scope.studentId));
+    const studentLabel = studentName ? `${studentName.firstName} ${studentName.lastName}` : "this student";
+    const incidentTitle = useCustom ? customTitle.trim() : selectedType?.title || "this incident";
+    const ok = await confirm({
+      title: "Confirm mark deduction",
+      message: (
+        <>
+          This will record "{incidentTitle}" for <strong className="font-semibold text-black">{studentLabel}</strong>{" "}
+          and deduct {marksDeducted} mark{Number(marksDeducted) === 1 ? "" : "s"} immediately — no review step. This
+          can't be undone. Save and deduct the marks?
+        </>
+      ),
+      confirmText: "Yes, save & deduct",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     setSubmitting(true);
     try {
@@ -2148,14 +2207,13 @@ function NewRecordModal({ types, onClose, onDone }) {
           </Field>
         ) : (
           <Field label="Misconduct type">
-            <Select value={misconductTypeId} onChange={(e) => handleTypeChange(e.target.value)} disabled={!scope.isCurrentAcademicYear}>
-              <option value="">Select...</option>
-              {types.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.title} (-{t.defaultDeduction})
-                </option>
-              ))}
-            </Select>
+            <SearchableSelect
+              options={buildMisconductOptions(types)}
+              value={misconductTypeId}
+              onChange={handleTypeChange}
+              disabled={!scope.isCurrentAcademicYear}
+              placeholder="Search incident types..."
+            />
           </Field>
         )}
 

@@ -7,6 +7,9 @@ import Button from "../components/ui/Button";
 import { Field, Select, Textarea } from "../components/ui/FormField";
 import { ErrorText, TermLockBadge, AllTermsLockedNotice, NotCurrentYearNotice } from "../components/ui/Alerts";
 import EvidenceUpload, { EvidenceFieldLabel } from "../components/ui/EvidenceUpload";
+import SearchableSelect from "../components/ui/SearchableSelect";
+import { buildMisconductOptions } from "../utils/misconductOptions";
+import { useConfirm } from "../components/ui/ConfirmProvider";
 import { useScopePicker } from "../hooks/useScopePicker";
 import { createReport, getMisconductTypes, listRecords } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
@@ -22,6 +25,7 @@ function fmtDate(d) {
 export default function ReportMistake() {
   const { user } = useAuth();
   const scope = useScopePicker();
+  const confirm = useConfirm();
   const [types, setTypes] = useState(null);
   const [misconductTypeId, setMisconductTypeId] = useState("");
   const [description, setDescription] = useState("");
@@ -81,6 +85,22 @@ export default function ReportMistake() {
       setError("Pick an incident from the list.");
       return;
     }
+
+    const student = scope.students.find((s) => String(s.id) === String(scope.studentId));
+    const studentLabel = student ? `${student.firstName} ${student.lastName}` : "this student";
+    const incidentTitle = types?.find((t) => String(t.id) === misconductTypeId)?.title || "this incident";
+    const ok = await confirm({
+      title: "Confirm report submission",
+      message: (
+        <>
+          This will submit a report on <strong className="font-semibold text-black">{studentLabel}</strong> for "
+          {incidentTitle}" to the discipline office for review. Submit this report?
+        </>
+      ),
+      confirmText: "Yes, submit report",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     setSubmitting(true);
     try {
@@ -221,18 +241,13 @@ export default function ReportMistake() {
         ) : (
           <>
         <Field label="Incident">
-          <Select
+          <SearchableSelect
+            options={buildMisconductOptions(visibleTypes)}
             value={misconductTypeId}
-            onChange={(e) => setMisconductTypeId(e.target.value)}
+            onChange={setMisconductTypeId}
             disabled={!types || !scope.isCurrentAcademicYear}
-          >
-            <option value="">{types ? "Select..." : "Loading..."}</option>
-            {visibleTypes?.map((t) => (
-              <option key={t.id} value={t.id}>
-                {capitalizeFirst(t.title)} (-{t.defaultDeduction})
-              </option>
-            ))}
-          </Select>
+            placeholder={types ? "Search incident types..." : "Loading..."}
+          />
           <p className="text-xs text-brand-600">
             The list and deduction marks are set by the Dean of Discipline.
           </p>
