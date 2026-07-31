@@ -1,19 +1,40 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
-import { FileText, Download } from "lucide-react";
+import { FileText, Download, AlertTriangle } from "lucide-react";
 import PillSelect, { ScopeBar, ScopeGroup } from "../components/ui/PillSelect";
 import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
 import { useScopePicker } from "../hooks/useScopePicker";
+import { useAuth } from "../context/AuthContext";
 import { getClassScores } from "../api/sbms";
 import ConductReportModal from "../components/ConductReportModal";
 import ClassConductReportModal from "../components/ClassConductReportModal";
 
+const CAN_APPROVE = ["dean_of_discipline", "disciplinary_officer"];
+
 export default function ClassReport() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const canApprove = CAN_APPROVE.includes(user.sbmsRole);
   const scope = useScopePicker({ needsStudent: false });
   const [scores, setScores] = useState(null);
   const [reportStudentId, setReportStudentId] = useState(null);
   const [reportsModalOpen, setReportsModalOpen] = useState(false);
+
+  // Jumps to the Records page's "All Reports" queue, pre-filtered to this
+  // student's pending report(s) so staff can act on it right away instead
+  // of hunting for it again.
+  function viewPendingReports(student) {
+    const params = new URLSearchParams({
+      tab: "reports",
+      status: "pending",
+      academicYearId: scope.academicYearId,
+      classId: scope.classId,
+      search: `${student.firstName} ${student.lastName}`.trim(),
+    });
+    navigate(`/records?${params.toString()}`);
+  }
 
   useEffect(() => {
     if (!scope.classId || !scope.termId || !scope.academicYearId) {
@@ -62,13 +83,13 @@ export default function ClassReport() {
         </ScopeGroup>
       </ScopeBar>
 
-      <Table className="table-fixed min-w-[560px]">
+      <Table className="table-fixed min-w-[680px]">
         <Thead>
           <tr>
-            <Th className="w-[18%]">Admission No.</Th>
-            <Th className="w-[36%]">Student</Th>
-            <Th className="w-[24%] text-center">Term Conduct /{scores?.[0]?.term.maxMarks ?? 40}</Th>
-            <Th className="w-[22%] text-right">Report</Th>
+            <Th className="w-[14%]">Admission No.</Th>
+            <Th className="w-[30%]">Student</Th>
+            <Th className="w-[20%] text-center">Term Conduct /{scores?.[0]?.term.maxMarks ?? 40}</Th>
+            <Th className="w-[36%] text-right">Report</Th>
           </tr>
         </Thead>
         <tbody>
@@ -85,7 +106,16 @@ export default function ClassReport() {
                   <span className="font-bold text-slate-800">{s.admissionNumber || "—"}</span>
                 </Td>
                 <Td className="font-medium text-slate-800">
-                  {s.firstName} {s.lastName}
+                  <div className="flex items-center gap-2">
+                    <span>
+                      {s.firstName} {s.lastName}
+                    </span>
+                    {s.pendingCount > 0 && (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600 whitespace-nowrap">
+                        <AlertTriangle size={11} /> {s.pendingCount} pending
+                      </span>
+                    )}
+                  </div>
                 </Td>
                 <Td className="text-center">
                   <div className="flex items-center justify-center gap-2">
@@ -100,12 +130,22 @@ export default function ClassReport() {
                   </div>
                 </Td>
                 <Td className="text-right">
-                  <button
-                    onClick={() => setReportStudentId(s.studentId)}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-brand-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-brand-500 transition-colors hover:border-brand-400 hover:bg-brand-50"
-                  >
-                    <FileText size={13} /> View overall report
-                  </button>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    {s.pendingCount > 0 && (
+                      <button
+                        onClick={() => viewPendingReports(s)}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3.5 py-1.5 text-xs font-semibold text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100"
+                      >
+                        <AlertTriangle size={13} /> {canApprove ? "Review to approve" : "View incidents"}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setReportStudentId(s.studentId)}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-brand-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-brand-500 transition-colors hover:border-brand-400 hover:bg-brand-50"
+                    >
+                      <FileText size={13} /> View overall report
+                    </button>
+                  </div>
                 </Td>
               </tr>
             ))

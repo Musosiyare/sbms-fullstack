@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "../context/AuthContext";
 import Card from "../components/ui/Card";
@@ -33,6 +33,7 @@ import {
   getStudentScore,
 } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
+import { getAvatarColor } from "../utils/avatarColor";
 import { exportWeekendPermissionPdf } from "../utils/pdf";
 import { Plus, Check, X, ChevronDown, Eye, ClipboardList, Users, GraduationCap, Clock, AlertTriangle, MessageCircle, Paperclip, Download, Info } from "lucide-react";
 import DiscussionModal from "../components/DiscussionModal";
@@ -190,8 +191,14 @@ export default function Records() {
   // canFinalize, which also includes Disciplinary Officers.
   const isDOD = user.sbmsRole === "dean_of_discipline";
 
-  const [activeTab, setActiveTab] = useState("reports");
-  const [statusFilter, setStatusFilter] = useState("pending");
+  // Class/Yearly Report link here with ?tab=&status=&academicYearId=&classId=&search=
+  // when a student has an unactioned report, so the queue opens already
+  // narrowed to that student instead of making staff refind it.
+  const location = useLocation();
+  const [initialParams] = useState(() => new URLSearchParams(location.search));
+
+  const [activeTab, setActiveTab] = useState(initialParams.get("tab") || "reports");
+  const [statusFilter, setStatusFilter] = useState(initialParams.get("status") || "pending");
   const [pendingRecords, setPendingRecords] = useState(null);
   const [types, setTypes] = useState([]);
   const [approveTarget, setApproveTarget] = useState(null); // record being approved
@@ -220,15 +227,18 @@ export default function Records() {
   // search and weekend status are derived client-side from what's loaded.
   const [reportClasses, setReportClasses] = useState([]);
   const [classFilter, setClassFilter] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialParams.get("search") || "");
   const [weekendFilter, setWeekendFilter] = useState("");
 
   useEffect(() => {
     getAcademicYears().then((years) => {
       setAcademicYears(years);
-      const current = years.find((y) => y.isCurrent) || years[0];
+      const requestedYearId = initialParams.get("academicYearId");
+      const requestedYear = requestedYearId && years.find((y) => String(y.id) === requestedYearId);
+      const current = requestedYear || years.find((y) => y.isCurrent) || years[0];
       if (current) setAcademicYearId(String(current.id));
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -237,7 +247,14 @@ export default function Records() {
       setReportClasses([]);
       return;
     }
-    getClasses(academicYearId).then(setReportClasses);
+    getClasses(academicYearId).then((classes) => {
+      setReportClasses(classes);
+      const requestedClassId = initialParams.get("classId");
+      if (requestedClassId && classes.find((c) => String(c.id) === requestedClassId)) {
+        setClassFilter(requestedClassId);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [academicYearId]);
 
   const isCurrentYearSelected =
@@ -828,6 +845,8 @@ function ClassBrowser({ onViewStudent }) {
             const counts = countsByKey[countsKey(c.id)] || {};
             const onWeekend = onWeekendByClass[c.id] || new Set();
             const flagged = students.filter((s) => counts[s.id] >= 3).length;
+            const boysCount = students.filter((s) => s.sex === "M").length;
+            const girlsCount = students.filter((s) => s.sex === "F").length;
             const rosterPage = rosterPageByClass[c.id] || 1;
             const rosterPageCount = Math.max(1, Math.ceil(students.length / ROSTER_PAGE_SIZE));
             const pagedStudents = students.slice(
@@ -838,7 +857,7 @@ function ClassBrowser({ onViewStudent }) {
               <div
                 key={c.id}
                 className={`rounded-xl border transition-colors duration-150 ${
-                  isOpen ? "border-brand-200 bg-brand-50/40 shadow-sm" : "border-slate-200 bg-white hover:border-slate-300"
+                  isOpen ? "border-brand-200 bg-white shadow-sm" : "border-slate-200 bg-white hover:border-slate-300"
                 }`}
               >
                 <button
@@ -855,13 +874,28 @@ function ClassBrowser({ onViewStudent }) {
                   </span>
                   <span className="flex-1 min-w-0">
                     <span className="block font-medium text-slate-800">{c.name}</span>
-                    <span className="block text-xs text-slate-400 mt-0.5">
-                      {students.length > 0
-                        ? `${students.length} student${students.length === 1 ? "" : "s"}${
-                            flagged > 0 ? ` · ${flagged} flagged` : ""
-                          }`
-                        : "Tap to view roster"}
-                    </span>
+                    {students.length > 0 ? (
+                      <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400 mt-0.5">
+                        <span>
+                          {students.length} student{students.length === 1 ? "" : "s"}
+                        </span>
+                        {boysCount > 0 && (
+                          <span className="inline-flex items-center gap-1">
+                            <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+                            {boysCount} boy{boysCount === 1 ? "" : "s"}
+                          </span>
+                        )}
+                        {girlsCount > 0 && (
+                          <span className="inline-flex items-center gap-1">
+                            <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
+                            {girlsCount} girl{girlsCount === 1 ? "" : "s"}
+                          </span>
+                        )}
+                        {flagged > 0 && <span>· {flagged} flagged</span>}
+                      </span>
+                    ) : (
+                      <span className="block text-xs text-slate-400 mt-0.5">Tap to view roster</span>
+                    )}
                   </span>
                   <ChevronDown
                     size={18}
@@ -882,14 +916,15 @@ function ClassBrowser({ onViewStudent }) {
                           const count = counts[s.id] || 0;
                           const isOnWeekend = onWeekend.has(s.id);
                           const initials = `${s.firstName?.[0] || ""}${s.lastName?.[0] || ""}`.toUpperCase();
+                          const avatarColor = getAvatarColor(`${s.firstName || ""} ${s.lastName || ""}`);
                           return (
                             <div
                               key={s.id}
-                              className={`flex items-center gap-3 rounded-lg px-2.5 py-2 hover:bg-blue-100 transition-colors ${
+                              className={`flex items-center gap-3 rounded-lg px-2.5 py-2 hover:bg-brand-50 transition-colors ${
                                 isOnWeekend ? "bg-amber-50/60" : ""
                               }`}
                             >
-                              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white ring-1 ring-slate-200 text-slate-500 text-xs font-semibold">
+                              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${avatarColor}`}>
                                 {initials}
                               </span>
                               <span className="flex-1 min-w-0 text-sm text-slate-700 truncate">
@@ -908,10 +943,10 @@ function ClassBrowser({ onViewStudent }) {
                               <button
                                 type="button"
                                 onClick={() => onViewStudent(s)}
-                                className="flex items-center justify-center rounded-md p-1.5 text-slate-900 hover:bg-blue-100 shrink-0 transition-colors"
+                                className="flex items-center justify-center rounded-md p-1.5 text-slate-900 hover:bg-brand-100 shrink-0 transition-colors"
                                 aria-label={`View ${s.firstName} ${s.lastName}'s incidents`}
                               >
-                                <Eye size={15} strokeWidth={2.75} />
+                                <Eye size={15} strokeWidth={1.75} />
                               </button>
                             </div>
                           );

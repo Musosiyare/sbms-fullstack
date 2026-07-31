@@ -24,6 +24,17 @@ async function sumDeductions(where) {
 }
 
 /**
+ * How many reports for a student (in whatever scope is passed — a term or
+ * a whole academic year) are still sitting at `pending`, i.e. reported but
+ * not yet approved/rejected by discipline staff. Used to flag a student on
+ * the class/yearly report screens so staff notice an open report hasn't
+ * been actioned yet, separate from the finalized-only score math above.
+ */
+async function countPending(where) {
+  return MisconductRecord.count({ where: { ...where, status: "pending" } });
+}
+
+/**
  * A single term's conduct score for one student.
  * remaining < 20 (i.e. more than half of 40 lost) is the "at risk" flag —
  * an early warning shown during the term itself, not a dismissal decision.
@@ -120,6 +131,7 @@ async function getClassYearlyReport(classId, academicYearId) {
         terms.map(async (term) => ({ termId: term.id, termName: term.name, ...(await getTermScore(student.id, term.id)) }))
       );
       const year = await getYearScore(student.id, academicYearId);
+      const pendingCount = await countPending({ studentId: student.id, academicYearId });
       return {
         studentId: student.id,
         firstName: student.firstName,
@@ -129,6 +141,7 @@ async function getClassYearlyReport(classId, academicYearId) {
         guardianPhone: student.guardianPhone,
         terms: termScores,
         year,
+        pendingCount,
       };
     })
   );
@@ -148,6 +161,7 @@ async function getClassScores(classId, termId, academicYearId) {
     students.map(async (student) => {
       const term = await getTermScore(student.id, termId);
       const year = await getYearScore(student.id, academicYearId);
+      const pendingCount = await countPending({ studentId: student.id, termId });
       return {
         studentId: student.id,
         firstName: student.firstName,
@@ -157,6 +171,7 @@ async function getClassScores(classId, termId, academicYearId) {
         guardianPhone: student.guardianPhone,
         term,
         year,
+        pendingCount,
       };
     })
   );
@@ -223,4 +238,5 @@ module.exports = {
   capDeductionToRemaining,
   isTermExceeded,
   getExceededStudentIds,
+  countPending,
 };

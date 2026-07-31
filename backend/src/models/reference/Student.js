@@ -14,6 +14,9 @@ Student.init(
     admissionNumber: { type: DataTypes.STRING, allowNull: true },
     guardianName: { type: DataTypes.STRING, allowNull: true },
     guardianPhone: { type: DataTypes.STRING, allowNull: true },
+    // Mirrors the main system's students.sex column (read-only, like every
+    // other field here) — powers the boys/girls breakdown on rosters.
+    sex: { type: DataTypes.ENUM("M", "F"), allowNull: true },
     status: { type: DataTypes.ENUM("active", "inactive"), defaultValue: "active" },
   },
   { sequelize, modelName: "Student", tableName: "students" }

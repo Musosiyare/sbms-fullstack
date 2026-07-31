@@ -44,6 +44,8 @@ import {
   Trash2,
   Gavel,
   Undo2,
+  ChevronRight,
+  CalendarRange,
 } from "lucide-react";
 import Button from "../components/ui/Button";
 import DiscussionModal from "../components/DiscussionModal";
@@ -128,8 +130,12 @@ function DisciplineOverview({ records }) {
       title="Discipline overview"
       subtitle="Everything currently happening across the discipline office."
       actions={
-        <Link to="/records" className="text-sm font-medium text-brand-600 hover:underline self-center">
+        <Link
+          to="/records"
+          className="self-center inline-flex items-center gap-1.5 rounded-lg bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-600 transition-colors hover:bg-brand-100"
+        >
           Go to Records
+          <ChevronRight size={15} />
         </Link>
       }
     >
@@ -900,6 +906,15 @@ export default function Dashboard() {
               icon={BarChart3}
               title="Class report"
               description="Termly and yearly conduct scores."
+              tone="brand"
+            />
+          )}
+          {["manager", "dean_of_discipline", "disciplinary_officer"].includes(user.sbmsRole) && (
+            <QuickAction
+              to="/yearly-report"
+              icon={CalendarRange}
+              title="Yearly report"
+              description="Full-year conduct summary and deliberation decisions."
               tone="brand"
             />
           )}
