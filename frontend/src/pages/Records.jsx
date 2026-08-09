@@ -206,7 +206,6 @@ export default function Records() {
   const [discussTarget, setDiscussTarget] = useState(null); // record whose discussion thread is open
   const [showNewRecord, setShowNewRecord] = useState(false);
   const [showClassDeduct, setShowClassDeduct] = useState(false);
-  const [viewStudent, setViewStudent] = useState(null); // { id, firstName, lastName } whose history is open
   const [selectedIds, setSelectedIds] = useState(new Set()); // pending record ids picked for a bulk action
   const [bulkApproveOpen, setBulkApproveOpen] = useState(false);
   const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
@@ -616,7 +615,7 @@ export default function Records() {
       </Card>
       )}
 
-      {activeTab === "students" && <ClassBrowser onViewStudent={setViewStudent} />}
+      {activeTab === "students" && <ClassBrowser />}
 
       {approveTarget && (
         <ApproveModal
@@ -686,14 +685,6 @@ export default function Records() {
         />
       )}
 
-      {viewStudent && (
-        <StudentRecordsModal
-          student={viewStudent}
-          currentUser={user}
-          onClose={() => setViewStudent(null)}
-        />
-      )}
-
       {discussTarget && (
         <DiscussionModal
           record={discussTarget}
@@ -713,7 +704,8 @@ export default function Records() {
  * see its roster, then open a student to see their full history
  * (StudentRecordsModal).
  */
-function ClassBrowser({ onViewStudent }) {
+function ClassBrowser() {
+  const { user } = useAuth();
   const [academicYears, setAcademicYears] = useState([]);
   const [academicYearId, setAcademicYearId] = useState("");
   const [terms, setTerms] = useState([]);
@@ -721,9 +713,10 @@ function ClassBrowser({ onViewStudent }) {
   const [classes, setClasses] = useState(null);
   const [expandedClassId, setExpandedClassId] = useState(null);
   const [studentsByClass, setStudentsByClass] = useState({}); // classId -> students[]
-  const [countsByKey, setCountsByKey] = useState({}); // "classId:termId" -> { studentId: count }
+  const [countsByKey, setCountsByKey] = useState({}); // "classId:termId" -> { studentId: { total, pending } }
   const [onWeekendByClass, setOnWeekendByClass] = useState({}); // classId -> Set(studentId currently sent home)
   const [loadingClassId, setLoadingClassId] = useState(null);
+  const [viewStudent, setViewStudent] = useState(null); // { id, firstName, lastName } whose history is open
 
   // Pagination — the class list can page (a school might run many classes
   // per year), and each expanded roster pages independently per class so
@@ -756,15 +749,33 @@ function ClassBrowser({ onViewStudent }) {
     return `${classId}:${termId || "all"}`;
   }
 
-  async function loadCounts(classId) {
+  // Fetches fresh per-student counts (total incidents + still-pending ones)
+  // for a class, bypassing the cache — used both for the first load and to
+  // refresh after an approve/reject so the roster badge's color is never
+  // stale about whether a student still has something awaiting review.
+  async function fetchCounts(classId) {
     const key = countsKey(classId);
-    if (countsByKey[key]) return;
     const records = await listRecords(termId ? { classId, termId } : { classId });
     const counts = {};
     records.forEach((r) => {
-      counts[r.studentId] = (counts[r.studentId] || 0) + 1;
+      const entry = counts[r.studentId] || { total: 0, pending: 0 };
+      entry.total += 1;
+      if (r.status === "pending") entry.pending += 1;
+      counts[r.studentId] = entry;
     });
     setCountsByKey((prev) => ({ ...prev, [key]: counts }));
+  }
+
+  async function loadCounts(classId) {
+    if (countsByKey[countsKey(classId)]) return;
+    await fetchCounts(classId);
+  }
+
+  // Called after a report is approved/rejected from the student history
+  // modal so the roster's badge color updates immediately instead of
+  // waiting for the next class/term switch to re-fetch.
+  function refreshExpandedCounts() {
+    if (expandedClassId) fetchCounts(expandedClassId);
   }
 
   // Whether a student is currently sent home is a today-vs-date check, not
@@ -844,7 +855,7 @@ function ClassBrowser({ onViewStudent }) {
             const students = studentsByClass[c.id] || [];
             const counts = countsByKey[countsKey(c.id)] || {};
             const onWeekend = onWeekendByClass[c.id] || new Set();
-            const flagged = students.filter((s) => counts[s.id] >= 3).length;
+            const flagged = students.filter((s) => (counts[s.id]?.total || 0) >= 3).length;
             const boysCount = students.filter((s) => s.sex === "M").length;
             const girlsCount = students.filter((s) => s.sex === "F").length;
             const rosterPage = rosterPageByClass[c.id] || 1;
@@ -913,7 +924,7 @@ function ClassBrowser({ onViewStudent }) {
                       <>
                       <div className="flex flex-col gap-1 pt-2.5">
                         {pagedStudents.map((s) => {
-                          const count = counts[s.id] || 0;
+                          const c = counts[s.id] || { total: 0, pending: 0 };
                           const isOnWeekend = onWeekend.has(s.id);
                           const initials = `${s.firstName?.[0] || ""}${s.lastName?.[0] || ""}`.toUpperCase();
                           const avatarColor = getAvatarColor(`${s.firstName || ""} ${s.lastName || ""}`);
@@ -933,16 +944,26 @@ function ClassBrowser({ onViewStudent }) {
                               {isOnWeekend && (
                                 <Badge tone="warning">On weekend</Badge>
                               )}
-                              {count ? (
-                                <Badge tone={count >= 3 ? "danger" : "warning"}>
-                                  {count} incident{count === 1 ? "" : "s"}
-                                </Badge>
+                              {c.total ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setViewStudent(s)}
+                                  className="shrink-0"
+                                  aria-label={`View ${s.firstName} ${s.lastName}'s incidents`}
+                                >
+                                  <Badge
+                                    tone={c.pending === 0 ? "ok" : c.total >= 3 ? "danger" : "warning"}
+                                    className="cursor-pointer"
+                                  >
+                                    {c.total} incident{c.total === 1 ? "" : "s"}
+                                  </Badge>
+                                </button>
                               ) : (
                                 <span className="text-xs text-slate-400 whitespace-nowrap">No incidents</span>
                               )}
                               <button
                                 type="button"
-                                onClick={() => onViewStudent(s)}
+                                onClick={() => setViewStudent(s)}
                                 className="flex items-center justify-center rounded-md p-1.5 text-slate-900 hover:bg-brand-100 shrink-0 transition-colors"
                                 aria-label={`View ${s.firstName} ${s.lastName}'s incidents`}
                               >
@@ -982,6 +1003,15 @@ function ClassBrowser({ onViewStudent }) {
         )}
         </>
       )}
+
+      {viewStudent && (
+        <StudentRecordsModal
+          student={viewStudent}
+          currentUser={user}
+          onClose={() => setViewStudent(null)}
+          onRecordChanged={refreshExpandedCounts}
+        />
+      )}
     </Card>
   );
 }
@@ -994,9 +1024,13 @@ function ClassBrowser({ onViewStudent }) {
  * MARKS_PER_TERM-based math, just recomputed per-record here since there's
  * no running-balance endpoint.
  */
-function StudentRecordsModal({ student, currentUser, onClose }) {
+function StudentRecordsModal({ student, currentUser, onClose, onRecordChanged }) {
   const [records, setRecords] = useState(null);
   const [termLabels, setTermLabels] = useState({}); // termId -> "Term 2 · 2025-2026"
+  const [approveTarget, setApproveTarget] = useState(null);
+  const [rejectTarget, setRejectTarget] = useState(null);
+
+  const canFinalize = CAN_FINALIZE.includes(currentUser.sbmsRole);
 
   function refresh() {
     listRecords({ studentId: student.id }).then(setRecords);
@@ -1067,6 +1101,9 @@ function StudentRecordsModal({ student, currentUser, onClose }) {
                             "{r.rejectionReason}"
                           </p>
                         )}
+                        {r.status === "pending" && canFinalize && !officerCanApprove(currentUser, r) && (
+                          <p className="text-xs text-slate-400 mt-1">Needs Dean of Discipline</p>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <MarksPill record={r} />
@@ -1074,6 +1111,34 @@ function StudentRecordsModal({ student, currentUser, onClose }) {
                           <span className="text-xs text-slate-400 whitespace-nowrap">
                             {r.remainingAfter}/{MARKS_PER_TERM} left
                           </span>
+                        )}
+                        {r.status === "pending" && canFinalize && (
+                          <div className="flex items-center gap-1.5">
+                            {officerCanApprove(currentUser, r) && (
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                className="!px-2"
+                                title="Approve"
+                                aria-label="Approve"
+                                onClick={() => setApproveTarget(r)}
+                              >
+                                <Check size={14} />
+                              </Button>
+                            )}
+                            {officerCanReject(currentUser, r) && (
+                              <Button
+                                size="sm"
+                                variant="danger"
+                                className="!px-2"
+                                title="Reject"
+                                aria-label="Reject"
+                                onClick={() => setRejectTarget(r)}
+                              >
+                                <X size={14} />
+                              </Button>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>
@@ -1115,6 +1180,30 @@ function StudentRecordsModal({ student, currentUser, onClose }) {
             </div>
           ))}
         </div>
+      )}
+
+      {approveTarget && (
+        <ApproveModal
+          record={approveTarget}
+          onClose={() => setApproveTarget(null)}
+          onDone={() => {
+            setApproveTarget(null);
+            refresh();
+            onRecordChanged?.();
+          }}
+        />
+      )}
+
+      {rejectTarget && (
+        <RejectModal
+          record={rejectTarget}
+          onClose={() => setRejectTarget(null)}
+          onDone={() => {
+            setRejectTarget(null);
+            refresh();
+            onRecordChanged?.();
+          }}
+        />
       )}
     </Modal>
   );
