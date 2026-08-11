@@ -187,9 +187,10 @@ function SectionTabs({ active, onChange }) {
 export default function Records() {
   const { user } = useAuth();
   const canFinalize = CAN_FINALIZE.includes(user.sbmsRole);
-  // Class-wide deduction is Dean of Discipline only — narrower than
-  // canFinalize, which also includes Disciplinary Officers.
-  const isDOD = user.sbmsRole === "dean_of_discipline";
+  // Class-wide deduction is open to both Dean of Discipline and
+  // Disciplinary Officer — same CAN_FINALIZE set. A Disciplinary Officer
+  // is still limited to non-weekend incidents there (enforced both in
+  // ClassDeductModal and on the backend), same as everywhere else.
 
   // Class/Yearly Report link here with ?tab=&status=&academicYearId=&classId=&search=
   // when a student has an unactioned report, so the queue opens already
@@ -356,11 +357,9 @@ export default function Records() {
           canFinalize &&
           isCurrentYearSelected && (
             <div className="flex items-center gap-2">
-              {isDOD && (
-                <Button variant="secondary" onClick={() => setShowClassDeduct(true)}>
-                  <Users size={15} /> Deduct from class
-                </Button>
-              )}
+              <Button variant="secondary" onClick={() => setShowClassDeduct(true)}>
+                <Users size={15} /> Deduct from class
+              </Button>
               <Button onClick={() => setShowNewRecord(true)}>
                 <Plus size={15} /> New record
               </Button>
@@ -487,7 +486,10 @@ export default function Records() {
                     </Td>
                   )}
                   <Td>
-                    {r.Student?.firstName} {r.Student?.lastName}
+                    <p className="font-medium text-slate-800">
+                      {r.Student?.firstName} {r.Student?.lastName}
+                    </p>
+                    <p className="text-xs text-slate-400">{r.Class?.name || "—"}</p>
                   </Td>
                   <Td>
                     <span className="inline-flex items-center gap-1.5">
@@ -1316,6 +1318,7 @@ function ApproveModal({ record, onClose, onDone }) {
       <div className="mb-4 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5">
         <p className="font-medium text-slate-800">
           {record.Student?.firstName} {record.Student?.lastName}
+          {record.Class?.name && <span className="ml-1.5 font-normal text-slate-400">· {record.Class.name}</span>}
         </p>
         <p>{capitalizeFirst(record.MisconductType?.title) || record.customTitle || "No incident type given"}</p>
         {record.description && <p className="mt-1 text-slate-500">{record.description}</p>}
@@ -1443,6 +1446,7 @@ function RejectModal({ record, onClose, onDone }) {
       <div className="mb-4 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5">
         <p className="font-medium text-slate-800">
           {record.Student?.firstName} {record.Student?.lastName}
+          {record.Class?.name && <span className="ml-1.5 font-normal text-slate-400">· {record.Class.name}</span>}
         </p>
         <p>{capitalizeFirst(record.MisconductType?.title) || record.customTitle || "No incident type given"}</p>
         {record.description && <p className="mt-1 text-slate-500">{record.description}</p>}
@@ -1705,14 +1709,17 @@ function BulkRejectModal({ ids, records, onClose, onDone }) {
 }
 
 /**
- * Dean of Discipline only — deducts the same marks from every active
- * student in a class at once (e.g. "the whole class refused to clean the
- * classroom"), instead of creating one record per student. Mirrors
- * NewRecordModal's catalog/custom picker, minus evidence upload and
- * send-home dates (see bulkClassRecord on the backend for why both are
- * left out of the bulk path). A roster checklist lets specific students
- * be left out of an otherwise class-wide action — e.g. students who were
- * absent, or who did clean up while the rest of the class didn't.
+ * Dean of Discipline or Disciplinary Officer — deducts the same marks
+ * from every active student in a class at once (e.g. "the whole class
+ * refused to clean the classroom"), instead of creating one record per
+ * student. Mirrors NewRecordModal's catalog/custom picker, minus evidence
+ * upload and send-home dates (see bulkClassRecord on the backend for why
+ * both are left out of the bulk path). A roster checklist lets specific
+ * students be left out of an otherwise class-wide action — e.g. students
+ * who were absent, or who did clean up while the rest of the class
+ * didn't. The catalog picker already only offers incidents that don't
+ * require sending a student home (see below) — that's a per-student call
+ * for both roles, never a class-wide one.
  */
 // Mirrors MARKS_PER_TERM in the backend's conductScoreService.
 const MAX_TERM_MARKS = 40;
@@ -1738,7 +1745,14 @@ function ClassDeductModal({ types, onClose, onDone }) {
 
   const selectedType = types.find((t) => String(t.id) === misconductTypeId);
   const blockedBySendHome = !useCustom && !!selectedType?.requiresSendHome;
-  const targetCount = Math.max(scope.students.length - excludedIds.size, 0);
+  // Students already serving an active weekend/send-home period can't
+  // receive another deduction until it ends (same rule the backend
+  // enforces on submit — see bulkClassRecord's auto-skip). Kept out of
+  // the pickable roster and count, same fix as the "Whole class" report
+  // form on ReportMistake.
+  const sendHomeStudents = scope.students.filter((s) => s.onActiveSendHome);
+  const pickableStudents = scope.students.filter((s) => !s.onActiveSendHome);
+  const targetCount = Math.max(pickableStudents.length - excludedIds.size, 0);
 
   function toggleExcluded(studentId) {
     setExcludedIds((prev) => {
@@ -1994,12 +2008,27 @@ function ClassDeductModal({ types, onClose, onDone }) {
         </Field>
 
         {scope.classId && (
-          <Field label={`Students (${targetCount} of ${scope.students.length} will receive this)`}>
+          <Field label={`Students (${targetCount} of ${pickableStudents.length} will receive this)`}>
             {scope.students.length === 0 ? (
               <p className="text-xs text-slate-400">No active students in this class.</p>
             ) : (
               <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">
-                {scope.students.map((s) => (
+                {sendHomeStudents.map((s) => (
+                  <div
+                    key={s.id}
+                    title={`Serving a weekend send-home until ${s.sendHomeUntil} — can't receive another deduction until then`}
+                    className="flex items-center gap-2.5 px-3.5 py-2 text-sm bg-slate-50/60 cursor-not-allowed"
+                  >
+                    <input type="checkbox" checked={false} disabled className="rounded border-slate-300" />
+                    <span className="text-slate-400 line-through">
+                      {s.firstName} {s.lastName}
+                    </span>
+                    <span className="ml-auto shrink-0 rounded-full bg-amber-50 text-amber-600 text-[11px] font-medium px-2 py-0.5">
+                      On weekend
+                    </span>
+                  </div>
+                ))}
+                {pickableStudents.map((s) => (
                   <label key={s.id} className="flex items-center gap-2.5 px-3.5 py-2 text-sm cursor-pointer hover:bg-slate-50">
                     <input
                       type="checkbox"

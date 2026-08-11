@@ -241,7 +241,7 @@ function drawConductReportPage(pdf, report) {
  * YearlyConductReportPaper.jsx's layout.
  */
 function drawYearlyReportPage(pdf, report) {
-  const { school, class: klass, academicYear, student, terms, year, deanOfDiscipline } = report;
+  const { school, class: klass, academicYear, student, terms, year, incidents, deanOfDiscipline } = report;
   const percent = Math.max(0, Math.round((year.remaining / year.maxMarks) * 100));
   const promoted = year.decision === "promoted";
 
@@ -322,6 +322,73 @@ function drawYearlyReportPage(pdf, report) {
       if (data.row.index === rows.length - 1) {
         data.cell.styles.fillColor = SLATE_100;
         data.cell.styles.fontStyle = "bold";
+      }
+    },
+  });
+
+  y = pdf.lastAutoTable.finalY + 9;
+
+  // Incidents summary — per-term counts on one line, then the full list of
+  // finalized incidents for the year (mirrors YearlyConductReportPaper.jsx
+  // on-screen so the downloaded PDF and the printed single-student view
+  // never show different information).
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(10.5);
+  pdf.setTextColor(...SLATE_800);
+  pdf.text("Incidents summary", MARGIN, y);
+
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(8);
+  pdf.setTextColor(...SLATE_600);
+  const countsLabel = terms
+    .map((t) => `${t.termName}: ${t.incidentsCount}`)
+    .concat([`Year total: ${incidents?.length || 0}`])
+    .join("    ");
+  pdf.text(countsLabel, A4.width - MARGIN, y, { align: "right" });
+  y += 4;
+
+  const incidentRows =
+    !incidents || incidents.length === 0
+      ? [["", "", "", "No finalized incidents this year.", ""]]
+      : incidents.map((i, idx) => [String(idx + 1), i.title, i.termName, formatDate(i.date), `-${i.marksDeducted}`]);
+
+  autoTable(pdf, {
+    startY: y,
+    margin: { left: MARGIN, right: MARGIN },
+    head: [["#", "Incident", "Term", "Date", "Marks"]],
+    body: incidentRows,
+    theme: "grid",
+    styles: {
+      font: "helvetica",
+      fontSize: 8,
+      textColor: SLATE_800,
+      lineColor: SLATE_300,
+      lineWidth: 0.2,
+      cellPadding: 1.8,
+      valign: "top",
+    },
+    headStyles: {
+      fillColor: SLATE_100,
+      textColor: SLATE_800,
+      fontStyle: "bold",
+      lineColor: SLATE_300,
+    },
+    columnStyles: {
+      0: { cellWidth: 8 },
+      1: { cellWidth: "auto" },
+      2: { cellWidth: 26 },
+      3: { cellWidth: 24 },
+      4: { cellWidth: 18, halign: "center" },
+    },
+    didParseCell: (data) => {
+      if ((!incidents || incidents.length === 0) && data.column.index !== 3) data.cell.text = [];
+      if ((!incidents || incidents.length === 0) && data.column.index === 3) {
+        data.cell.styles.halign = "center";
+        data.cell.styles.textColor = SLATE_500;
+        data.cell.colSpan = 5;
+      }
+      if (data.section === "head" && data.column.index === 4) {
+        data.cell.styles.halign = "center";
       }
     },
   });

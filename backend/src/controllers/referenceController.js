@@ -2,6 +2,7 @@ const { AcademicYear, Term, Class, Student, User, TeacherModuleAssignment, Delib
 const { Op } = require("sequelize");
 const ApiError = require("../utils/ApiError");
 const conductScoreService = require("../services/conductScoreService");
+const { findActiveSendHome } = require("../services/sendHomeService");
 
 /**
  * These four endpoints only ever SELECT from the shared reference tables —
@@ -92,6 +93,28 @@ async function excludeDismissed(studentList, termId) {
   return studentList.filter((s) => !excluded.has(s.id));
 }
 
+/**
+ * Tags each student with whether they're currently serving an active
+ * send-home ("weekend") period. Used by callers that let someone pick
+ * students for a NEW incident/report — a student already on send-home
+ * can't be reported again until it ends (see assertNoActiveSendHome /
+ * bulkClassReport's auto-skip in misconductRecordController), so the
+ * picker can grey them out and say why up front instead of the person
+ * only finding out after submitting.
+ */
+async function withSendHomeStatus(studentList) {
+  const checks = await Promise.all(studentList.map((s) => findActiveSendHome(s.id)));
+  return studentList.map((s, i) => {
+    const active = checks[i];
+    const plain = s.toJSON ? s.toJSON() : s;
+    return {
+      ...plain,
+      onActiveSendHome: !!active,
+      sendHomeUntil: active ? active.sentHomeTo : null,
+    };
+  });
+}
+
 async function students(req, res, next) {
   try {
     const { classId, termId } = req.query;
@@ -102,7 +125,7 @@ async function students(req, res, next) {
       where: { classId, status: "active" },
       order: [["firstName", "ASC"]],
     });
-    res.json(await excludeDismissed(list, termId));
+    res.json(await withSendHomeStatus(await excludeDismissed(list, termId)));
   } catch (err) {
     next(err);
   }

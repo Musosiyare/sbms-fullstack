@@ -15,6 +15,7 @@ import SearchableSelect from "../components/ui/SearchableSelect";
 import { buildMisconductOptions } from "../utils/misconductOptions";
 import { useScopePicker } from "../hooks/useScopePicker";
 import PillSelect from "../components/ui/PillSelect";
+import Pagination from "../components/ui/Pagination";
 import {
   listRecords,
   getMisconductTypes,
@@ -46,6 +47,7 @@ import {
   Undo2,
   ChevronRight,
   CalendarRange,
+  Search,
 } from "lucide-react";
 import Button from "../components/ui/Button";
 import DiscussionModal from "../components/DiscussionModal";
@@ -209,10 +211,11 @@ function SentHomeModal({ open, onClose, records }) {
                   {initials || "?"}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-slate-800">
+                  <p className="text-sm font-semibold text-slate-800 break-words">
                     {r.Student?.firstName} {r.Student?.lastName}
                   </p>
                   <p className="truncate text-xs text-slate-500">
+                    {r.Class?.name && <span className="text-slate-400">{r.Class.name} · </span>}
                     {capitalizeFirst(r.MisconductType?.title) || r.customTitle || "Untitled incident"}
                   </p>
                 </div>
@@ -240,13 +243,68 @@ function SentHomeModal({ open, onClose, records }) {
  * A teacher/reporter's own tracking view: what they've flagged, and where
  * each one landed — still pending, approved, or rejected (with the reason).
  */
-function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = true }) {
+const MY_REPORTS_PAGE_SIZE = 10;
+
+function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = true, teacherClasses = [] }) {
   const [discussTarget, setDiscussTarget] = useState(null);
   const [viewTarget, setViewTarget] = useState(null);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [classFilter, setClassFilter] = useState("");
   const mine = useMemo(() => {
     if (!records) return null;
     return records.filter((r) => r.reportedBy?.id === user.id);
   }, [records, user.id]);
+
+  // A teacher who teaches more than one class gets everything mixed
+  // together here — this filter narrows "My reports" down to a single
+  // class at a time, same idea as the class filter on the discipline
+  // side's Records page. Built from the classes the teacher actually
+  // teaches (same source as the Report form's class picker), not just
+  // classes they've already reported into — otherwise the filter would
+  // stay hidden until a second class had at least one report.
+  const myClasses = useMemo(
+    () => [...teacherClasses].sort((a, b) => a.name.localeCompare(b.name)),
+    [teacherClasses]
+  );
+
+  // If a class filter no longer applies (year switched, no longer
+  // teaching it), drop back to "All classes" instead of silently
+  // filtering to nothing.
+  useEffect(() => {
+    if (classFilter && !myClasses.some((c) => String(c.id) === String(classFilter))) {
+      setClassFilter("");
+    }
+  }, [myClasses, classFilter]);
+
+  // Stats above stay based on everything the teacher's ever reported,
+  // regardless of the search box — only the table below narrows down, so
+  // typing a name to find one report doesn't make the counts look wrong.
+  const visible = useMemo(() => {
+    if (!mine) return null;
+    const q = search.trim().toLowerCase();
+    let filtered = classFilter ? mine.filter((r) => String(r.Class?.id) === String(classFilter)) : mine;
+    filtered = q
+      ? filtered.filter((r) => `${r.Student?.firstName || ""} ${r.Student?.lastName || ""}`.toLowerCase().includes(q))
+      : filtered;
+    return [...filtered].sort((a, b) =>
+      `${a.Student?.firstName || ""} ${a.Student?.lastName || ""}`.localeCompare(
+        `${b.Student?.firstName || ""} ${b.Student?.lastName || ""}`
+      )
+    );
+  }, [mine, search, classFilter]);
+
+  // A class-wide report can drop 20-30 rows in at once, and every new
+  // search narrows the set — reset back to page 1 whenever either changes
+  // so a teacher doesn't land on a stale/empty page and think results are
+  // missing.
+  useEffect(() => {
+    setPage(1);
+  }, [visible?.length, search, classFilter]);
+
+  const pageCount = visible ? Math.max(1, Math.ceil(visible.length / MY_REPORTS_PAGE_SIZE)) : 1;
+  const pageStart = (page - 1) * MY_REPORTS_PAGE_SIZE;
+  const pageItems = visible ? visible.slice(pageStart, pageStart + MY_REPORTS_PAGE_SIZE) : [];
 
   const stats = useMemo(() => {
     if (!mine) return null;
@@ -274,6 +332,27 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
             <StatCard icon={XCircle} label="Rejected" value={stats.rejected} tone="red" />
           </div>
 
+          {mine.length > 0 && (
+            <div className="flex flex-wrap items-center gap-3 mb-4">
+              <div className="relative max-w-sm w-full">
+                <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by student name..."
+                  className="form-field w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 shadow-sm outline-none transition-all hover:border-slate-300 focus:border-brand-400 focus:bg-white"
+                />
+              </div>
+              {myClasses.length > 0 && (
+                <PillSelect
+                  options={[{ id: "", label: "All classes" }, ...myClasses.map((c) => ({ id: c.id, label: c.name }))]}
+                  value={classFilter}
+                  onChange={setClassFilter}
+                />
+              )}
+            </div>
+          )}
+
           <Table>
             <Thead>
               <tr>
@@ -288,12 +367,18 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
             <tbody>
               {mine.length === 0 ? (
                 <EmptyRow colSpan={6}>You haven't reported anything yet.</EmptyRow>
+              ) : visible.length === 0 ? (
+                <EmptyRow colSpan={6}>
+                  {search ? `No reports match "${search}".` : "No reports for this class."}
+                </EmptyRow>
               ) : (
-                mine.slice(0, 10).map((r) => (
+                pageItems.map((r) => (
                   <tr key={r.id}>
                     <Td className="font-medium text-slate-800">
-                      <span className="inline-flex items-center gap-1.5">
-                        {r.Student?.firstName} {r.Student?.lastName}
+                      <div className="flex items-center gap-1.5">
+                        <span>
+                          {r.Student?.firstName} {r.Student?.lastName}
+                        </span>
                         {r.evidence?.length > 0 && (
                           <Paperclip
                             size={12}
@@ -301,7 +386,8 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
                             title={`${r.evidence.length} file(s) attached`}
                           />
                         )}
-                      </span>
+                      </div>
+                      <p className="text-xs font-normal text-slate-400">{r.Class?.name || "—"}</p>
                     </Td>
                     <Td>{capitalizeFirst(r.MisconductType?.title) || r.customTitle || "—"}</Td>
                     <Td>
@@ -326,6 +412,14 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
               )}
             </tbody>
           </Table>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            totalItems={visible.length}
+            pageSize={MY_REPORTS_PAGE_SIZE}
+            onPageChange={setPage}
+            className="mt-4"
+          />
         </>
       )}
       {discussTarget && (
@@ -351,10 +445,11 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
 
 /**
  * Opened from the eye icon on "My reports" — the full incident + evidence
- * for one of the teacher's own reports. While the report hasn't been
- * approved yet, they can also fix the incident type/description here (and
- * attach more evidence), or delete the report entirely; both are blocked
- * the moment it's `finalized` (mirrors the backend rule).
+ * for one of the teacher's own reports. Editing/deleting is only offered
+ * while the report is still `pending`: once the discipline office has
+ * acted on it — approved (`finalized`) or `rejected` — it's a decided
+ * record, so this only offers a read-only view from that point on
+ * (mirrors the backend rule).
  */
 function MyReportDetailModal({ record, currentUser, onClose, onEvidenceChange, onRecordDeleted }) {
   const confirm = useConfirm();
@@ -367,7 +462,7 @@ function MyReportDetailModal({ record, currentUser, onClose, onEvidenceChange, o
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
 
-  const canModify = record.reportedByUserId === currentUser.id && record.status !== "finalized";
+  const canModify = record.reportedByUserId === currentUser.id && record.status === "pending";
 
   function startEdit() {
     setMisconductTypeId(record.MisconductType?.id ?? record.misconductTypeId ?? "");
@@ -428,9 +523,12 @@ function MyReportDetailModal({ record, currentUser, onClose, onEvidenceChange, o
     <Modal open onClose={onClose} title="Report details" size="sm">
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-semibold text-slate-800">
-            {record.Student?.firstName} {record.Student?.lastName}
-          </p>
+          <div>
+            <p className="text-sm font-semibold text-slate-800">
+              {record.Student?.firstName} {record.Student?.lastName}
+            </p>
+            <p className="text-xs text-slate-400">{record.Class?.name || "—"}</p>
+          </div>
           <Badge tone={PUNISHED_TONE[record.status]}>{PUNISHED_LABEL[record.status]}</Badge>
         </div>
 
@@ -584,7 +682,6 @@ function ExceededMarksCard({ termId, academicYearId, termLabel, canDecide, isCur
             <Thead>
               <tr>
                 <Th>Student</Th>
-                <Th>Class</Th>
                 <Th>Marks</Th>
                 {canDecide && <Th className="text-right">Action</Th>}
               </tr>
@@ -594,9 +691,10 @@ function ExceededMarksCard({ termId, academicYearId, termLabel, canDecide, isCur
                 <tr key={s.studentId}>
                   <Td className="font-medium text-slate-800">
                     {s.firstName} {s.lastName}
-                    <span className="block text-xs font-normal text-slate-400">{s.admissionNumber || "—"}</span>
+                    <span className="block text-xs font-normal text-slate-400">
+                      {s.className || "—"} · {s.admissionNumber || "—"}
+                    </span>
                   </Td>
-                  <Td className="text-slate-600">{s.className || "—"}</Td>
                   <Td>
                     <Badge tone="danger">-{s.score.deducted}</Badge>
                   </Td>
@@ -799,6 +897,18 @@ function DeliberationModal({ student, termId, academicYearId, isCurrentAcademicY
   );
 }
 
+/**
+ * "Good morning/afternoon/evening" based on the visitor's local clock —
+ * hour boundaries match common convention (morning until noon, afternoon
+ * until 5pm, evening after).
+ */
+function timeOfDayGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
 export default function Dashboard() {
   const { user } = useAuth();
   const [records, setRecords] = useState(null);
@@ -835,7 +945,9 @@ export default function Dashboard() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <p className="text-slate-600">Welcome back, {user.name?.split(" ")[0]}.</p>
+        <p className="text-slate-600">
+          <span className="font-bold text-brand-600">{timeOfDayGreeting()}</span>, {user.name?.split(" ")[0]}.
+        </p>
       </div>
 
       {(showOverview || showMyReports) && (
@@ -876,6 +988,7 @@ export default function Dashboard() {
           user={user}
           onRecordsChange={refreshRecords}
           isCurrentYear={scope.isCurrentAcademicYear}
+          teacherClasses={scope.classes}
         />
       )}
 

@@ -78,10 +78,11 @@ async function getYearScore(studentId, academicYearId) {
 
 /**
  * The finalized incidents behind a student's yearly score, one row per
- * record — title, which term it fell in, the date it was finalized (marks
- * actually applied), and how many marks it cost. Only 'finalized' records,
- * same as the score sums above, so this always reconciles with the
- * per-term/yearly totals on the same report.
+ * record — title, which term it fell in (both id and name, so callers can
+ * group/count by term as well as just display it), the date it was
+ * finalized (marks actually applied), and how many marks it cost. Only
+ * 'finalized' records, same as the score sums above, so this always
+ * reconciles with the per-term/yearly totals on the same report.
  */
 async function getYearlyIncidents(studentId, academicYearId) {
   const { MisconductType } = require("../models");
@@ -93,6 +94,7 @@ async function getYearlyIncidents(studentId, academicYearId) {
   return records.map((r) => ({
     id: r.id,
     title: r.MisconductType?.title || r.customTitle || "Misconduct",
+    termId: r.termId,
     termName: r.Term?.name || "",
     date: r.finalizedAt || r.createdAt,
     marksDeducted: r.marksDeducted,
@@ -101,24 +103,37 @@ async function getYearlyIncidents(studentId, academicYearId) {
 
 /**
  * The full yearly picture for one student: every term in the academic year
- * with its own score, plus the combined yearly total and the promotion/
- * dismissal decision. Powers the printable yearly conduct report — Theo's
- * "combine all three terms and decide" process laid out on paper.
+ * with its own score (plus how many finalized incidents fell in it), the
+ * combined yearly total, and the promotion/dismissal decision, plus the
+ * flat incidents list itself (each already tagged with its term — see
+ * getYearlyIncidents) so a report can show both "how many per term" and
+ * "the full list" from one payload. Powers the printable yearly conduct
+ * report — Theo's "combine all three terms and decide" process laid out
+ * on paper.
  */
 async function getYearlyReport(studentId, academicYearId) {
   const terms = await Term.findAll({ where: { academicYearId }, order: [["id", "ASC"]], raw: true });
+  const incidents = await getYearlyIncidents(studentId, academicYearId);
   const termScores = await Promise.all(
-    terms.map(async (term) => ({ termId: term.id, termName: term.name, ...(await getTermScore(studentId, term.id)) }))
+    terms.map(async (term) => ({
+      termId: term.id,
+      termName: term.name,
+      ...(await getTermScore(studentId, term.id)),
+      incidentsCount: incidents.filter((i) => i.termId === term.id).length,
+    }))
   );
   const year = await getYearScore(studentId, academicYearId);
-  const incidents = await getYearlyIncidents(studentId, academicYearId);
-  return { terms: termScores, year, incidents };
+  return { terms: termScores, year, incidents, incidentsCount: incidents.length };
 }
 
 /**
- * Every active student in a class with their yearly score and decision —
- * powers the class-wide "Yearly decisions" list/download so the Dean of
- * Discipline doesn't have to open each student individually at year end.
+ * Every active student in a class with their yearly score, decision, and
+ * incidents (both the full finalized list and a per-term/overall count) —
+ * the year-end counterpart to classConductReport. The incidents/counts
+ * mirror getYearlyReport exactly, just gathered for a whole class in one
+ * pass so the class-wide "Incidents" column and the bulk "Yearly reports"
+ * PDF (which needs the same per-student incident detail as the single-
+ * student view) don't each have to re-fetch it separately.
  */
 async function getClassYearlyReport(classId, academicYearId) {
   const { Student } = require("../models");
@@ -127,8 +142,14 @@ async function getClassYearlyReport(classId, academicYearId) {
 
   return Promise.all(
     students.map(async (student) => {
+      const incidents = await getYearlyIncidents(student.id, academicYearId);
       const termScores = await Promise.all(
-        terms.map(async (term) => ({ termId: term.id, termName: term.name, ...(await getTermScore(student.id, term.id)) }))
+        terms.map(async (term) => ({
+          termId: term.id,
+          termName: term.name,
+          ...(await getTermScore(student.id, term.id)),
+          incidentsCount: incidents.filter((i) => i.termId === term.id).length,
+        }))
       );
       const year = await getYearScore(student.id, academicYearId);
       const pendingCount = await countPending({ studentId: student.id, academicYearId });
@@ -141,6 +162,8 @@ async function getClassYearlyReport(classId, academicYearId) {
         guardianPhone: student.guardianPhone,
         terms: termScores,
         year,
+        incidents,
+        incidentsCount: incidents.length,
         pendingCount,
       };
     })

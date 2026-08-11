@@ -36,6 +36,7 @@ export const createRecord = (payload, files) =>
     .post("/misconduct-records", files && files.length ? toFormData(payload, files) : payload)
     .then((r) => r.data);
 export const bulkClassRecord = (payload) => api.post("/misconduct-records/class", payload).then((r) => r.data);
+export const bulkClassReport = (payload) => api.post("/misconduct-records/class-report", payload).then((r) => r.data);
 export const approveRecord = (id, payload) => api.patch(`/misconduct-records/${id}/approve`, payload).then((r) => r.data);
 export const rejectRecord = (id, reason) => api.patch(`/misconduct-records/${id}/reject`, { reason }).then((r) => r.data);
 export const bulkApproveRecords = (ids) => api.post("/misconduct-records/bulk-approve", { ids }).then((r) => r.data);

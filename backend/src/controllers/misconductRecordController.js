@@ -50,9 +50,7 @@ async function saveEvidenceFiles(files, record, userId) {
   );
 }
 
-function toDateOnly(date) {
-  return date.toISOString().slice(0, 10);
-}
+const { toDateOnly, findActiveSendHome } = require("../services/sendHomeService");
 
 /**
  * When a misconduct type is flagged `requiresSendHome`, the send-home date
@@ -145,25 +143,6 @@ async function assertCurrentAcademicYear(academicYearId) {
       `${year.name} isn't the current academic year — reports and records can only be created for the current year.`
     );
   }
-}
-
-/**
- * A student can't be sent home again while they're still serving an
- * existing send-home period — find any other finalized record for this
- * student whose [sentHomeFrom, sentHomeTo] range covers today.
- * `excludeRecordId` lets approve() re-check a record against itself
- * without tripping on its own (not-yet-saved) range.
- */
-async function findActiveSendHome(studentId, excludeRecordId) {
-  const today = toDateOnly(new Date());
-  const where = {
-    studentId,
-    status: "finalized",
-    sentHomeFrom: { [Op.ne]: null, [Op.lte]: today },
-    sentHomeTo: { [Op.ne]: null, [Op.gte]: today },
-  };
-  if (excludeRecordId) where.id = { [Op.ne]: excludeRecordId };
-  return MisconductRecord.findOne({ where, include: [{ model: MisconductType }] });
 }
 
 async function assertNoActiveSendHome(studentId, excludeRecordId) {
@@ -415,14 +394,17 @@ async function createRecord(req, res, next) {
 }
 
 /**
- * Dean of Discipline deducts the same conduct marks from every active
- * student in a class at once — e.g. "the whole class refused to clean
- * the classroom" — instead of creating one record per student by hand.
+ * Dean of Discipline / Disciplinary Officer deducts the same conduct
+ * marks from every active student in a class at once — e.g. "the whole
+ * class refused to clean the classroom" — instead of creating one record
+ * per student by hand.
  *
- * Deliberately restricted to the Dean of Discipline only, unlike the rest
- * of CAN_FINALIZE — this moves marks for an entire class in a single
- * action with no per-student review, so it doesn't get the same access a
- * Disciplinary Officer has for one-at-a-time records.
+ * Open to both roles in CAN_FINALIZE, but a Disciplinary Officer is still
+ * bound by the same requiresSendHome check just below as everywhere else:
+ * an incident that sends students home can never go through this
+ * class-wide path for anyone (Dean of Discipline included — see the
+ * check below), which in practice means an officer only ever gets to use
+ * this for incidents that don't need a weekend.
  *
  * Records are created already finalized (marks move immediately), same
  * as createRecord — there's no "whole-class report -> review" pathway,
@@ -446,7 +428,7 @@ async function createRecord(req, res, next) {
  */
 async function bulkClassRecord(req, res, next) {
   try {
-    if (req.user.sbmsRole !== "dean_of_discipline") return next(ApiError.forbidden());
+    if (!CAN_FINALIZE.includes(req.user.sbmsRole)) return next(ApiError.forbidden());
 
     const {
       classId,
@@ -565,6 +547,138 @@ async function bulkClassRecord(req, res, next) {
       skippedSendHome: skippedSendHome.map((s) => ({ id: s.id, firstName: s.firstName, lastName: s.lastName })),
       skippedDismissed: skippedDismissed.map((s) => ({ id: s.id, firstName: s.firstName, lastName: s.lastName })),
       exceededStudents,
+      records,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Teacher (sbmsRole 'reporter') or manager equivalent of bulkClassRecord:
+ * raises one *pending* report per active student in a class in a single
+ * action — "the whole class was late back from break" — instead of
+ * submitting one report per student through createReport. Gives a
+ * teacher the same whole-class convenience the Dean of Discipline has
+ * with bulkClassRecord, but stays true to the report pathway: nothing is
+ * finalized and no marks move here — every report still lands in the
+ * discipline office's review queue exactly like an individual report
+ * would, to be approved or rejected one at a time (or via bulk-approve).
+ *
+ * Not opened up to dean_of_discipline/disciplinary_officer — they already
+ * have bulkClassRecord for a class-wide action, and that one finalizes
+ * immediately instead of adding 30+ pending reports to their own queue.
+ *
+ * Same restriction as bulkClassRecord: an incident flagged
+ * requiresSendHome is refused outright — deciding to send an entire
+ * class home for the weekend is a per-student judgment call for the
+ * discipline office, not something a class-wide report should even
+ * suggest.
+ *
+ * `excludeStudentIds` mirrors bulkClassRecord too — leave specific
+ * students out of an otherwise class-wide report (e.g. students who were
+ * absent that day).
+ *
+ * Evidence upload isn't supported here, same reasoning as bulkClassRecord.
+ */
+async function bulkClassReport(req, res, next) {
+  try {
+    if (!["reporter", "manager"].includes(req.user.sbmsRole)) return next(ApiError.forbidden());
+
+    const {
+      classId,
+      termId,
+      academicYearId,
+      misconductTypeId,
+      customTitle,
+      description,
+      excludeStudentIds,
+    } = req.body;
+
+    if (!classId || !termId || !academicYearId) {
+      return next(ApiError.badRequest("classId, termId and academicYearId are required"));
+    }
+    if (!misconductTypeId && !customTitle && !description) {
+      return next(ApiError.badRequest("Pick an incident from the list", "misconductTypeId"));
+    }
+    await assertCurrentAcademicYear(academicYearId);
+    await assertTermOpen(termId, academicYearId);
+
+    let type = null;
+    if (misconductTypeId) {
+      type = await MisconductType.findByPk(misconductTypeId);
+      if (!type) return next(ApiError.notFound("Misconduct type not found"));
+      if (type.requiresSendHome) {
+        return next(
+          ApiError.badRequest(
+            "This incident sends students home — it can't be reported for a whole class at once. Report it for each student individually.",
+            "misconductTypeId"
+          )
+        );
+      }
+    }
+
+    const klass = await Class.findByPk(classId);
+    if (!klass || klass.schoolId !== req.schoolId) return next(ApiError.notFound("Class not found"));
+
+    // Same restriction as the single-student createReport: a plain
+    // teacher can only report a class they actually teach.
+    if (req.user.sbmsRole === "reporter") {
+      await assertTeacherTeachesClass(req.user.id, klass.id, academicYearId);
+    }
+
+    const excludeSet = new Set((Array.isArray(excludeStudentIds) ? excludeStudentIds : []).map(Number));
+    const students = await Student.findAll({ where: { classId: klass.id, status: "active" } });
+    const candidates = students.filter((s) => !excludeSet.has(s.id));
+
+    // Same rule as createReport: a student already serving a weekend/
+    // send-home period sits out of a class-wide report too — auto-
+    // skipped here rather than failing the whole batch, same "whole
+    // class except a few" design as bulkClassRecord.
+    const sendHomeChecks = await Promise.all(candidates.map((s) => findActiveSendHome(s.id)));
+    const afterSendHome = candidates.filter((_, i) => !sendHomeChecks[i]);
+    const skippedSendHome = candidates.filter((_, i) => sendHomeChecks[i]);
+
+    // Same again for dismissed students, auto-skipped rather than
+    // failing the whole batch.
+    const dismissalChecks = await Promise.all(afterSendHome.map((s) => findDismissal(s.id, termId)));
+    const targets = afterSendHome.filter((_, i) => !dismissalChecks[i]);
+    const skippedDismissed = afterSendHome.filter((_, i) => dismissalChecks[i]);
+
+    if (targets.length === 0) {
+      return next(
+        ApiError.badRequest(
+          "No students to report — check the class roster, your exclusions, or active send-home/dismissal periods"
+        )
+      );
+    }
+
+    const records = await Promise.all(
+      targets.map((student) =>
+        MisconductRecord.create({
+          schoolId: req.schoolId,
+          studentId: student.id,
+          classId: klass.id,
+          academicYearId,
+          termId,
+          misconductTypeId: misconductTypeId || null,
+          customTitle: customTitle || null,
+          description,
+          status: "pending",
+          marksDeducted: 0,
+          reportedByUserId: req.user.id,
+          reportedByRole: req.user.sbmsRole,
+        })
+      )
+    );
+
+    res.status(201).json({
+      classId: klass.id,
+      className: klass.name,
+      count: records.length,
+      excluded: excludeSet.size,
+      skippedSendHome: skippedSendHome.map((s) => ({ id: s.id, firstName: s.firstName, lastName: s.lastName })),
+      skippedDismissed: skippedDismissed.map((s) => ({ id: s.id, firstName: s.firstName, lastName: s.lastName })),
       records,
     });
   } catch (err) {
@@ -823,6 +937,7 @@ async function list(req, res, next) {
       include: [
         { model: MisconductType },
         { model: Student, attributes: ["id", "firstName", "lastName"] },
+        { model: Class, attributes: ["id", "name"] },
         { model: User, as: "reportedBy", attributes: ["id", "name", "role", "disciplineRole"] },
         { model: User, as: "finalizedBy", attributes: ["id", "name", "role", "disciplineRole"] },
         { model: User, as: "rejectedBy", attributes: ["id", "name", "role", "disciplineRole"] },
@@ -857,12 +972,12 @@ async function getOne(req, res, next) {
 
 /**
  * Lets whoever raised a report fix a mistake in it — wrong incident type
- * or a typo in the description — while discipline hasn't yet acted on it.
- * Blocked only once `finalized` (marks have already moved on the strength
- * of what was submitted, so it becomes part of the historical record).
- * Editing a `rejected` report puts it back to `pending`: it silently
- * staying "rejected" after being corrected would hide the change from the
- * review queue, and re-raising it is the whole point of fixing it.
+ * or a typo in the description — while it's still `pending`. Blocked once
+ * the discipline office has acted on it either way: `finalized` (marks
+ * have already moved on the strength of what was submitted, so it becomes
+ * part of the historical record) or `rejected` (the office has already
+ * reviewed and made a call on it — a correction at that point should be
+ * raised as a fresh report, not silently reopen a decided one).
  */
 async function updateReport(req, res, next) {
   try {
@@ -873,6 +988,9 @@ async function updateReport(req, res, next) {
     }
     if (record.status === "finalized") {
       return next(ApiError.conflict("A report can't be edited once it's been approved"));
+    }
+    if (record.status === "rejected") {
+      return next(ApiError.conflict("A rejected report can't be edited — raise a new report instead"));
     }
 
     const { misconductTypeId, description } = req.body;
@@ -885,14 +1003,6 @@ async function updateReport(req, res, next) {
     }
     if (description !== undefined) record.description = description || null;
 
-    if (record.status === "rejected") {
-      record.status = "pending";
-      record.rejectionReason = null;
-      record.rejectedByUserId = null;
-      record.rejectedByRole = null;
-      record.rejectedAt = null;
-    }
-
     await record.save();
     await record.reload({ include: [EVIDENCE_INCLUDE] });
     res.json(record);
@@ -902,12 +1012,10 @@ async function updateReport(req, res, next) {
 }
 
 /**
- * Lets whoever raised a report withdraw it entirely — blocked only once
- * `finalized` (approved records are the historical, mark-affecting
- * record and can't be pulled out from under it; a rejected report is
- * still fair game to withdraw). Cleans up everything hanging off the
- * record — evidence files/rows and any discipline discussion thread —
- * so nothing is left pointing at a record that no longer exists.
+ * Lets whoever raised a report withdraw it entirely — blocked once the
+ * discipline office has acted on it, same reasoning as updateReport:
+ * `finalized` records are the historical, mark-affecting record, and a
+ * `rejected` one has already been reviewed and decided on.
  */
 async function deleteReport(req, res, next) {
   try {
@@ -918,6 +1026,9 @@ async function deleteReport(req, res, next) {
     }
     if (record.status === "finalized") {
       return next(ApiError.conflict("A report can't be deleted once it's been approved"));
+    }
+    if (record.status === "rejected") {
+      return next(ApiError.conflict("A rejected report can't be deleted — it stays on file as reviewed"));
     }
 
     const evidenceFiles = record.evidence.map((e) => path.join(EVIDENCE_DIR, e.storedName));
@@ -1032,6 +1143,7 @@ module.exports = {
   createReport,
   createRecord,
   bulkClassRecord,
+  bulkClassReport,
   approve,
   reject,
   bulkApprove,

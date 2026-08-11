@@ -100,6 +100,7 @@ export default function YearlyReport() {
         student: s,
         terms: s.terms,
         year: s.year,
+        incidents: s.incidents,
       }));
       exportYearlyReportPdf(reports, `${fileBase}-yearly-reports.pdf`);
     } catch (err) {
@@ -153,25 +154,26 @@ export default function YearlyReport() {
         </p>
       )}
 
-      <Table className="table-fixed min-w-[780px]">
+      <Table className="table-fixed min-w-[850px]">
         <Thead>
           <tr>
-            <Th className="w-[13%]">Admission No.</Th>
-            <Th className="w-[26%]">Student</Th>
-            <Th className="w-[13%] text-center">
+            <Th className="w-[12%]">Admission No.</Th>
+            <Th className="w-[23%]">Student</Th>
+            <Th className="w-[12%] text-center">
               Remaining /{data?.students?.[0]?.year.maxMarks ?? 120}
             </Th>
-            <Th className="w-[13%] text-center">Decision</Th>
-            <Th className="w-[35%] text-right">Report</Th>
+            <Th className="w-[10%] text-center">Incidents</Th>
+            <Th className="w-[12%] text-center">Decision</Th>
+            <Th className="w-[31%] text-right">Report</Th>
           </tr>
         </Thead>
         <tbody>
           {!scope.classId || !scope.academicYearId ? (
-            <EmptyRow colSpan={5}>Pick an academic year and class above.</EmptyRow>
+            <EmptyRow colSpan={6}>Pick an academic year and class above.</EmptyRow>
           ) : data === null ? (
-            <EmptyRow colSpan={5}>Loading...</EmptyRow>
+            <EmptyRow colSpan={6}>Loading...</EmptyRow>
           ) : data.students.length === 0 ? (
-            <EmptyRow colSpan={5}>No students in this class.</EmptyRow>
+            <EmptyRow colSpan={6}>No students in this class.</EmptyRow>
           ) : (
             data.students.map((s) => {
               const promoted = s.year.decision === "promoted";
@@ -193,6 +195,14 @@ export default function YearlyReport() {
                     </div>
                   </Td>
                   <Td className="text-center font-bold tabular-nums text-slate-800">{s.year.remaining}</Td>
+                  <Td className="text-center">
+                    <span
+                      className="inline-flex items-center justify-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 tabular-nums"
+                      title={s.terms.map((t) => `${t.termName}: ${t.incidentsCount}`).join(" · ")}
+                    >
+                      {s.incidentsCount}
+                    </span>
+                  </Td>
                   <Td className="text-center">
                     <span
                       className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${

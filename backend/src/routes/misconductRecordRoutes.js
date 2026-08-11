@@ -7,7 +7,8 @@ router.use(authenticate, scopeToSchool);
 
 router.post("/report", evidenceUpload, ctrl.createReport); // teacher/manager: raise a pending report, with optional evidence
 router.post("/", evidenceUpload, ctrl.createRecord); // DOD/disciplinary officer: record directly, finalized, with optional evidence
-router.post("/class", ctrl.bulkClassRecord); // Dean of Discipline only: deduct the same marks from a whole class at once
+router.post("/class", ctrl.bulkClassRecord); // DOD/disciplinary officer: deduct the same marks from a whole class at once (non-weekend incidents only)
+router.post("/class-report", ctrl.bulkClassReport); // teacher/manager: raise pending reports for a whole class at once (non-weekend incidents only)
 router.post("/bulk-approve", ctrl.bulkApprove); // DOD/disciplinary officer: approve many pending reports at once
 router.post("/bulk-reject", ctrl.bulkReject); // DOD/disciplinary officer: reject many pending reports at once, one shared reason
 router.patch("/:id/approve", ctrl.approve); // DOD/disciplinary officer: approve a pending report, marks auto-deducted

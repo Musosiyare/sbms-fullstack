@@ -84,7 +84,19 @@ export default function YearlyConductReportPaper({ report }) {
 
         {/* Incidents summary */}
         <div className="mb-6">
-          <p className="text-sm font-semibold mb-2">Incidents summary</p>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-semibold">Incidents summary</p>
+            <div className="flex items-center gap-3 text-xs text-slate-600">
+              {terms.map((t) => (
+                <span key={t.termId}>
+                  {t.termName}: <span className="font-semibold text-slate-800">{t.incidentsCount}</span>
+                </span>
+              ))}
+              <span className="pl-2 border-l border-slate-300">
+                Year total: <span className="font-semibold text-slate-800">{incidents?.length || 0}</span>
+              </span>
+            </div>
+          </div>
           {incidents && incidents.length > 0 ? (
             <table className="w-full text-xs border-collapse">
               <thead>
