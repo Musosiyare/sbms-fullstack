@@ -7,7 +7,9 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "setup-tables": "node scripts/setupSbmsTables.js",
-    "assign-role": "node scripts/assignRole.js"
+    "backfill-activity-log": "node scripts/backfillActivityLogMetadata.js",
+    "assign-role": "node scripts/assignRole.js",
+    "audit-deliberation-conflicts": "node scripts/auditDeliberationConflicts.js"
   },
   "license": "ISC",
   "dependencies": {

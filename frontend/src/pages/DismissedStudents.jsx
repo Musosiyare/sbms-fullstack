@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
-import { Download, UserX } from "lucide-react";
+import { Download, UserX, Cpu } from "lucide-react";
 import { toast } from "sonner";
 import { Field, Select } from "../components/ui/FormField";
+import { YearSelect } from "../components/ui/PillSelect";
 import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
 import { getAcademicYears, getTerms, getDismissedStudentsReport } from "../api/sbms";
 import { exportDismissedStudentsPdf } from "../utils/pdf";
@@ -16,8 +17,14 @@ function slugify(value) {
 }
 
 const DECISION_META = {
-  dismissed_permanently: { label: "Dismissed permanently", className: "bg-red-50 text-red-700" },
-  dismissed_term: { label: "Dismissed (term)", className: "bg-amber-50 text-amber-700" },
+  dismissed_permanently: {
+    label: "Dismissed permanently",
+    className: "text-red-700",
+  },
+  dismissed_term: {
+    label: "Dismissed (term)",
+    className: "text-amber-700",
+  },
 };
 
 function formatDate(value) {
@@ -27,7 +34,13 @@ function formatDate(value) {
 
 /**
  * School-wide list of every dismissed student — pulled from the same
- * Deliberation decisions the dashboard's exceeded-marks flow records.
+ * Deliberation table the dashboard's exceeded-marks flow writes to. That
+ * includes students the system itself auto-dismissed for crossing half
+ * the year's cumulative marks with nobody having formally decided on
+ * them (see deliberationController.applySystemYearlyDismissals) — those
+ * rows are indistinguishable from a staff decision here except that
+ * "Decided by" reads "System" instead of a person's name, since they're
+ * the exact same kind of Deliberation row, just authored differently.
  * Deliberately its own scope (not the shared useScopePicker/global term)
  * since "All terms" is the natural default here: someone auditing
  * dismissals usually wants the whole year at a glance, then narrows to a
@@ -65,6 +78,7 @@ export default function DismissedStudents() {
   const students = data?.students || [];
   const permanentCount = students.filter((s) => s.decision === "dismissed_permanently").length;
   const termCount = students.filter((s) => s.decision === "dismissed_term").length;
+  const systemCount = students.filter((s) => s.decidedBy === "System").length;
 
   const selectedTermName = terms.find((t) => String(t.id) === String(termId))?.name || null;
   const fileBase = data ? `${slugify(data.academicYear.name)}-dismissed-students` : "dismissed-students";
@@ -93,7 +107,7 @@ export default function DismissedStudents() {
   return (
     <Card
       title="Dismissed Students"
-      subtitle="Every student dismissed this year — permanently, or for a term."
+      subtitle="Every student dismissed this year — by staff decision, or automatically by the system for exceeding a year's marks."
       actions={
         <Button variant="primary" onClick={handleDownload} disabled={!students.length || exporting}>
           <Download size={15} /> {exporting ? "Generating…" : "Download PDF"}
@@ -102,13 +116,13 @@ export default function DismissedStudents() {
     >
       <div className="grid sm:grid-cols-3 gap-4 mb-5">
         <Field label="Academic year">
-          <Select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)}>
-            {academicYears.map((y) => (
-              <option key={y.id} value={y.id}>
-                {y.name}
-              </option>
-            ))}
-          </Select>
+          <YearSelect
+            fullWidth
+            options={academicYears.map((y) => ({ id: y.id, label: y.name, isCurrent: y.isCurrent }))}
+            value={academicYearId}
+            onChange={setAcademicYearId}
+            emptyLabel="No academic years yet"
+          />
         </Field>
         <Field label="Term">
           <Select value={termId} onChange={(e) => setTermId(e.target.value)} disabled={!terms.length}>
@@ -140,6 +154,11 @@ export default function DismissedStudents() {
           <span className="inline-flex items-center rounded-full bg-amber-50 px-3.5 py-1.5 text-xs font-semibold text-amber-700">
             {termCount} by term
           </span>
+          {systemCount > 0 && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-50 px-3.5 py-1.5 text-xs font-semibold text-violet-700">
+              <Cpu size={12} /> {systemCount} dismissed automatically by the system
+            </span>
+          )}
         </div>
       )}
 
@@ -147,44 +166,59 @@ export default function DismissedStudents() {
         <Thead>
           <tr>
             <Th>Student</Th>
-            <Th>Admission No.</Th>
-            <Th>Class</Th>
-            <Th>Term</Th>
+            <Th className="hidden lg:table-cell">Class</Th>
+            <Th className="hidden lg:table-cell">Term</Th>
             <Th>Decision</Th>
-            <Th>Reason</Th>
-            <Th>Decided by</Th>
+            <Th className="hidden md:table-cell">Reason</Th>
+            <Th className="hidden sm:table-cell">Decided by</Th>
             <Th className="text-right">Date</Th>
           </tr>
         </Thead>
         <tbody>
           {!academicYearId ? (
-            <EmptyRow colSpan={8}>Pick an academic year above.</EmptyRow>
+            <EmptyRow colSpan={7}>Pick an academic year above.</EmptyRow>
           ) : data === null ? (
-            <EmptyRow colSpan={8}>Loading...</EmptyRow>
+            <EmptyRow colSpan={7}>Loading...</EmptyRow>
           ) : students.length === 0 ? (
-            <EmptyRow colSpan={8}>No dismissed students match these filters.</EmptyRow>
+            <EmptyRow colSpan={7}>No dismissed students match these filters.</EmptyRow>
           ) : (
             students.map((s) => {
-              const meta = DECISION_META[s.decision] || { label: s.decision, className: "bg-slate-100 text-slate-600" };
+              const meta = DECISION_META[s.decision] || { label: s.decision, className: "text-slate-600" };
+              const bySystem = s.decidedBy === "System";
               return (
                 <tr key={s.deliberationId}>
-                  <Td className="font-medium text-slate-800">
-                    {s.firstName} {s.lastName}
+                  <Td className="max-w-[160px] sm:max-w-[220px]">
+                    <div className="font-medium text-slate-800 truncate">
+                      {s.firstName} {s.lastName}
+                    </div>
+                    <div className="text-xs text-slate-400 truncate">
+                      {s.admissionNumber || "—"}
+                      {s.className ? ` · ${s.className}` : ""}
+                      <span className="lg:hidden">{s.termName ? ` · ${s.termName}` : ""}</span>
+                    </div>
                   </Td>
-                  <Td>
-                    <span className="font-accent font-semibold text-brand-500">{s.admissionNumber || "—"}</span>
+                  <Td className="hidden lg:table-cell">{s.className || "—"}</Td>
+                  <Td className="hidden lg:table-cell">{s.termName || "—"}</Td>
+                  <Td className="whitespace-nowrap">
+                    <span className={meta.className}>{meta.label}</span>
+                    {bySystem && (
+                      <span className="ml-1.5 inline-flex items-center gap-1 text-[11px] text-violet-700 sm:hidden">
+                        <Cpu size={11} /> System
+                      </span>
+                    )}
                   </Td>
-                  <Td>{s.className || "—"}</Td>
-                  <Td>{s.termName || "—"}</Td>
-                  <Td>
-                    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${meta.className}`}>
-                      {meta.label}
-                    </span>
-                  </Td>
-                  <Td className="max-w-xs truncate" title={s.reason || ""}>
+                  <Td className="hidden md:table-cell max-w-[180px] xl:max-w-[260px] truncate" title={s.reason || ""}>
                     {s.reason || "—"}
                   </Td>
-                  <Td>{s.decidedBy || "—"}</Td>
+                  <Td className="hidden sm:table-cell whitespace-nowrap">
+                    {bySystem ? (
+                      <span className="inline-flex items-center gap-1 text-violet-700">
+                        <Cpu size={12} /> System
+                      </span>
+                    ) : (
+                      s.decidedBy || "—"
+                    )}
+                  </Td>
                   <Td className="text-right whitespace-nowrap">{formatDate(s.decidedAt)}</Td>
                 </tr>
               );

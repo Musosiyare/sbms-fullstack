@@ -16,6 +16,10 @@ const MisconductEvidence = require("./MisconductEvidence");
 const Discussion = require("./Discussion");
 const DiscussionMessage = require("./DiscussionMessage");
 const Deliberation = require("./Deliberation");
+const SmsLog = require("./SmsLog");
+const ActivityLog = require("./ActivityLog");
+const NotificationSeen = require("./NotificationSeen");
+const NotificationRead = require("./NotificationRead");
 
 // --- MisconductType -> School ---
 School.hasMany(MisconductType, { foreignKey: "schoolId" });
@@ -79,6 +83,40 @@ Deliberation.belongsTo(Term, { foreignKey: "termId" });
 
 Deliberation.belongsTo(User, { as: "decidedBy", foreignKey: "decidedByUserId" });
 
+// --- SmsLog -> everything it references ---
+School.hasMany(SmsLog, { foreignKey: "schoolId" });
+SmsLog.belongsTo(School, { foreignKey: "schoolId" });
+
+Student.hasMany(SmsLog, { foreignKey: "studentId" });
+SmsLog.belongsTo(Student, { foreignKey: "studentId" });
+
+MisconductRecord.hasMany(SmsLog, { foreignKey: "misconductRecordId" });
+SmsLog.belongsTo(MisconductRecord, { foreignKey: "misconductRecordId" });
+
+// --- ActivityLog -> everything it references ---
+School.hasMany(ActivityLog, { foreignKey: "schoolId" });
+ActivityLog.belongsTo(School, { foreignKey: "schoolId" });
+
+Student.hasMany(ActivityLog, { foreignKey: "studentId" });
+ActivityLog.belongsTo(Student, { foreignKey: "studentId" });
+
+ActivityLog.belongsTo(User, { as: "actor", foreignKey: "actorUserId" });
+ActivityLog.belongsTo(User, { as: "relatedUser", foreignKey: "relatedUserId" });
+
+// --- NotificationSeen -> School / User ---
+School.hasMany(NotificationSeen, { foreignKey: "schoolId" });
+NotificationSeen.belongsTo(School, { foreignKey: "schoolId" });
+
+User.hasMany(NotificationSeen, { foreignKey: "userId" });
+NotificationSeen.belongsTo(User, { foreignKey: "userId" });
+
+// --- NotificationRead -> School / User ---
+School.hasMany(NotificationRead, { foreignKey: "schoolId" });
+NotificationRead.belongsTo(School, { foreignKey: "schoolId" });
+
+User.hasMany(NotificationRead, { foreignKey: "userId" });
+NotificationRead.belongsTo(User, { foreignKey: "userId" });
+
 // --- TeacherModuleAssignment -> Class / User ---
 Class.hasMany(TeacherModuleAssignment, { foreignKey: "classId" });
 TeacherModuleAssignment.belongsTo(Class, { foreignKey: "classId" });
@@ -101,4 +139,8 @@ module.exports = {
   Discussion,
   DiscussionMessage,
   Deliberation,
+  SmsLog,
+  ActivityLog,
+  NotificationSeen,
+  NotificationRead,
 };

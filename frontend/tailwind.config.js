@@ -32,6 +32,11 @@ export default {
           "sans-serif",
         ],
         display: ["Playfair Display", "Georgia", "serif"],
+        // Distinct, bold geometric sans reserved for the app's chrome —
+        // the sidebar wordmark and the top page-title bar — so those
+        // "header" surfaces read as unmistakably different from the
+        // serif headings used inside report content and marketing pages.
+        header: ["Poppins", "-apple-system", "sans-serif"],
         // "Amélina Colette" isn't distributed on a public CDN (1001fonts,
         // personal-use only), so it's listed first here purely so that if
         // this school later buys/self-hosts a licensed copy and adds an

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "../context/AuthContext";
 import Card from "../components/ui/Card";
-import Badge from "../components/ui/Badge";
+import Badge, { TextBadge } from "../components/ui/Badge";
 import Modal from "../components/ui/Modal";
 import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
 import { Field, Select, Textarea } from "../components/ui/FormField";
@@ -14,7 +14,7 @@ import { useConfirm } from "../components/ui/ConfirmProvider";
 import SearchableSelect from "../components/ui/SearchableSelect";
 import { buildMisconductOptions } from "../utils/misconductOptions";
 import { useScopePicker } from "../hooks/useScopePicker";
-import PillSelect from "../components/ui/PillSelect";
+import PillSelect, { YearSelect } from "../components/ui/PillSelect";
 import Pagination from "../components/ui/Pagination";
 import {
   listRecords,
@@ -27,6 +27,7 @@ import {
   undoDeliberation,
 } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
+import { DECISION_TONE, DECISION_EMPHASIS, decisionLabel, exceededReasonLabel } from "../utils/deliberation";
 import {
   FlagTriangleRight,
   ClipboardList,
@@ -48,6 +49,7 @@ import {
   ChevronRight,
   CalendarRange,
   Search,
+  Cpu,
 } from "lucide-react";
 import Button from "../components/ui/Button";
 import DiscussionModal from "../components/DiscussionModal";
@@ -79,33 +81,30 @@ function fmtDate(d) {
   return d ? new Date(d).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—";
 }
 
-function StatCard({ icon: Icon, label, value, tone, onClick }) {
+/**
+ * Compact pill version of a stat — a fraction of the height of a full
+ * stat box, so a stats row reads as a quick strip instead of a wall of
+ * boxes. Used for the discipline overview and "My reports" summary.
+ */
+function MiniStat({ icon: Icon, label, value, tone, onClick }) {
   const TONES = {
-    amber: "bg-amber-50 text-amber-600",
-    emerald: "bg-emerald-50 text-emerald-600",
-    red: "bg-red-50 text-red-600",
-    violet: "bg-violet-50 text-violet-600",
-    brand: "bg-brand-50 text-brand-600",
+    amber: "bg-amber-50 text-amber-700",
+    emerald: "bg-emerald-50 text-emerald-700",
+    red: "bg-red-50 text-red-700",
+    violet: "bg-violet-50 text-violet-700",
   };
   const Wrapper = onClick ? "button" : "div";
   return (
     <Wrapper
       type={onClick ? "button" : undefined}
       onClick={onClick}
-      className={`flex items-center gap-3 bg-white border border-slate-200 rounded-xl p-4 text-left w-full ${
-        onClick ? "hover:border-brand-200 hover:shadow-sm transition cursor-pointer" : ""
+      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs whitespace-nowrap ${TONES[tone]} ${
+        onClick ? "transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm cursor-pointer" : ""
       }`}
     >
-      <div className={`flex h-11 w-11 items-center justify-center rounded-full shrink-0 ${TONES[tone]}`}>
-        <Icon size={20} />
-      </div>
-      <div>
-        <p className="text-2xl font-semibold text-slate-800 tabular-nums leading-tight">{value}</p>
-        <p className="text-sm text-slate-500">
-          {label}
-          {onClick && <span className="text-brand-500 font-medium"> · view</span>}
-        </p>
-      </div>
+      <Icon size={13} />
+      <span className="font-semibold tabular-nums">{value}</span>
+      <span className="font-medium opacity-75">{label}</span>
     </Wrapper>
   );
 }
@@ -129,6 +128,7 @@ function DisciplineOverview({ records }) {
 
   return (
     <Card
+      className="min-h-[10rem]"
       title="Discipline overview"
       subtitle="Everything currently happening across the discipline office."
       actions={
@@ -141,22 +141,24 @@ function DisciplineOverview({ records }) {
         </Link>
       }
     >
-      {stats === null ? (
-        <p className="text-sm text-slate-400">Loading...</p>
-      ) : (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard icon={Clock} label="Pending review" value={stats.pending.length} tone="amber" />
-          <StatCard icon={CheckCircle2} label="Approved / recorded" value={stats.finalized.length} tone="emerald" />
-          <StatCard icon={XCircle} label="Rejected" value={stats.rejected.length} tone="red" />
-          <StatCard
-            icon={Home}
-            label="Currently sent home"
-            value={stats.sentHomeNow.length}
-            tone="violet"
-            onClick={() => setSentHomeOpen(true)}
-          />
-        </div>
-      )}
+      <div>
+        {stats === null ? (
+          <p className="text-sm text-slate-400">Loading...</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            <MiniStat icon={Clock} label="Pending review" value={stats.pending.length} tone="amber" />
+            <MiniStat icon={CheckCircle2} label="Approved / recorded" value={stats.finalized.length} tone="emerald" />
+            <MiniStat icon={XCircle} label="Rejected" value={stats.rejected.length} tone="red" />
+            <MiniStat
+              icon={Home}
+              label="Currently sent home"
+              value={stats.sentHomeNow.length}
+              tone="violet"
+              onClick={() => setSentHomeOpen(true)}
+            />
+          </div>
+        )}
+      </div>
 
       {stats && (
         <SentHomeModal open={sentHomeOpen} onClose={() => setSentHomeOpen(false)} records={stats.sentHomeNow} />
@@ -205,7 +207,7 @@ function SentHomeModal({ open, onClose, records }) {
             return (
               <div
                 key={r.id}
-                className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3.5 hover:border-slate-300 transition-colors"
+                className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm"
               >
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-violet-50 text-sm font-semibold text-violet-600">
                   {initials || "?"}
@@ -251,6 +253,7 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [classFilter, setClassFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const mine = useMemo(() => {
     if (!records) return null;
     return records.filter((r) => r.reportedBy?.id === user.id);
@@ -284,6 +287,7 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
     if (!mine) return null;
     const q = search.trim().toLowerCase();
     let filtered = classFilter ? mine.filter((r) => String(r.Class?.id) === String(classFilter)) : mine;
+    filtered = statusFilter ? filtered.filter((r) => r.status === statusFilter) : filtered;
     filtered = q
       ? filtered.filter((r) => `${r.Student?.firstName || ""} ${r.Student?.lastName || ""}`.toLowerCase().includes(q))
       : filtered;
@@ -292,7 +296,7 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
         `${b.Student?.firstName || ""} ${b.Student?.lastName || ""}`
       )
     );
-  }, [mine, search, classFilter]);
+  }, [mine, search, classFilter, statusFilter]);
 
   // A class-wide report can drop 20-30 rows in at once, and every new
   // search narrows the set — reset back to page 1 whenever either changes
@@ -300,7 +304,7 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
   // missing.
   useEffect(() => {
     setPage(1);
-  }, [visible?.length, search, classFilter]);
+  }, [visible?.length, search, classFilter, statusFilter]);
 
   const pageCount = visible ? Math.max(1, Math.ceil(visible.length / MY_REPORTS_PAGE_SIZE)) : 1;
   const pageStart = (page - 1) * MY_REPORTS_PAGE_SIZE;
@@ -320,16 +324,33 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
   const viewRecord = viewTarget && mine ? mine.find((r) => r.id === viewTarget.id) || viewTarget : viewTarget;
 
   return (
-    <Card title="My reports" subtitle="Mistakes you've flagged, and how each one was handled.">
+    <Card
+      title="My reports"
+      subtitle="Mistakes you've flagged, and how each one was handled."
+      actions={
+        <Link
+          to="/report"
+          className="self-center inline-flex items-center gap-1.5 rounded-lg bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-600 transition-colors hover:bg-brand-100"
+        >
+          <FlagTriangleRight size={15} />
+          Report a mistake
+        </Link>
+      }
+    >
+      {!isCurrentYear && (
+        <div className="mb-4">
+          <NotCurrentYearNotice action="reports can only be edited or withdrawn" />
+        </div>
+      )}
       {stats === null ? (
         <p className="text-sm text-slate-400">Loading...</p>
       ) : (
         <>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <StatCard icon={FileWarning} label="Total reported" value={stats.total} tone="brand" />
-            <StatCard icon={Clock} label="Pending review" value={stats.pending} tone="amber" />
-            <StatCard icon={CheckCircle2} label="Approved" value={stats.finalized} tone="emerald" />
-            <StatCard icon={XCircle} label="Rejected" value={stats.rejected} tone="red" />
+          <div className="flex flex-wrap gap-2 mb-6">
+            <MiniStat icon={FileWarning} label="Total reported" value={stats.total} tone="violet" />
+            <MiniStat icon={Clock} label="Pending review" value={stats.pending} tone="amber" />
+            <MiniStat icon={CheckCircle2} label="Approved" value={stats.finalized} tone="emerald" />
+            <MiniStat icon={XCircle} label="Rejected" value={stats.rejected} tone="red" />
           </div>
 
           {mine.length > 0 && (
@@ -344,12 +365,25 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
                 />
               </div>
               {myClasses.length > 0 && (
-                <PillSelect
-                  options={[{ id: "", label: "All classes" }, ...myClasses.map((c) => ({ id: c.id, label: c.name }))]}
+                <YearSelect
+                  options={[
+                    { id: "", label: "All classes", isCurrent: false },
+                    ...myClasses.map((c) => ({ id: c.id, label: c.name, isCurrent: true })),
+                  ]}
                   value={classFilter}
                   onChange={setClassFilter}
                 />
               )}
+              <PillSelect
+                options={[
+                  { id: "", label: "All statuses" },
+                  { id: "pending", label: "Pending" },
+                  { id: "finalized", label: "Punished" },
+                  { id: "rejected", label: "Not punished" },
+                ]}
+                value={statusFilter}
+                onChange={setStatusFilter}
+              />
             </div>
           )}
 
@@ -369,7 +403,7 @@ function MyReportsOverview({ records, user, onRecordsChange, isCurrentYear = tru
                 <EmptyRow colSpan={6}>You haven't reported anything yet.</EmptyRow>
               ) : visible.length === 0 ? (
                 <EmptyRow colSpan={6}>
-                  {search ? `No reports match "${search}".` : "No reports for this class."}
+                  {search ? `No reports match "${search}".` : "No reports match these filters."}
                 </EmptyRow>
               ) : (
                 pageItems.map((r) => (
@@ -604,191 +638,202 @@ function MyReportDetailModal({ record, currentUser, onClose, onEvidenceChange, o
   );
 }
 
-const DECISION_LABEL = {
-  dismissed_permanently: "Dismissed permanently",
-  dismissed_term: "Dismissed for the term",
-  retained: "Retained",
-};
-const DECISION_TONE = {
-  dismissed_permanently: "danger",
-  dismissed_term: "warning",
-  retained: "ok",
-};
+/**
+ * Every student in the selected term who's used up all 40 conduct marks
+ * and still needs a Dean of Discipline / Disciplinary Officer / manager
+ * ruling — dismiss permanently, dismiss for the term, or stain the
+ * record. Kept as its own full-width card since it's the actionable
+ * queue and deserves the most attention on the dashboard.
+ */
+function PendingDeliberationCard({ students, termLabel, canDecide, canDecideNow, onDecide }) {
+  return (
+    <Card
+      title={
+        <span className="inline-flex items-center gap-2">
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+            <Clock size={12} />
+          </span>
+          Awaiting deliberation
+        </span>
+      }
+      subtitle={`${students.length} student${students.length === 1 ? "" : "s"} exceeded their conduct marks (per term or cumulatively for the year) and still need${students.length === 1 ? "s" : ""} a decision.`}
+    >
+      <Table>
+        <Thead>
+          <tr>
+            <Th>Student</Th>
+            <Th>Marks</Th>
+            {canDecide && <Th className="text-right">Action</Th>}
+          </tr>
+        </Thead>
+        <tbody>
+          {students.map((s) => (
+            <tr key={s.studentId}>
+              <Td className="font-medium text-slate-800">
+                {s.firstName} {s.lastName}
+                <span className="block text-xs font-normal text-slate-400">
+                  {s.className || "—"} · {s.admissionNumber || "—"}
+                </span>
+              </Td>
+              <Td>
+                <div className="flex flex-col gap-1">
+                  <Badge tone="danger">
+                    -{s.score.deducted}
+                    {s.exceededYear ? ` (term) / -${s.yearScore.deducted} (year)` : ""}
+                  </Badge>
+                  <span className="text-xs text-slate-400">{exceededReasonLabel(s)}</span>
+                </div>
+              </Td>
+              {canDecide && (
+                <Td className="text-right">
+                  <Button size="sm" variant="secondary" onClick={() => onDecide(s)} disabled={!canDecideNow}>
+                    <Gavel size={13} /> Decide
+                  </Button>
+                </Td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </Card>
+  );
+}
 
 /**
- * Discipline-office deliberation cards: every student in the selected
- * term who has used up all 40 of their conduct marks, with a decision
- * button for the Dean of Discipline / Disciplinary Officer / manager to
- * rule on — dismiss permanently, dismiss for the term, or retain them.
- * Already-decided students stay visible (their card shows the decision
- * made) so the office can revisit or undo a call without losing track of
- * who's already been handled this term.
+ * Students already ruled on this term — kept visible (not just the
+ * pending queue) so the office can revisit or undo a call without
+ * losing track of who's been handled. Sized to sit side-by-side with
+ * the (now compact) discipline overview card rather than stacking
+ * another full-width block underneath it.
+ *
+ * System-decided students (see applySystemYearlyDismissals) get no
+ * action at all here — no button, nothing clickable — since that
+ * decision genuinely can't be changed. This is gated on `locked`, not
+ * just `bySystem`: `locked` is true whenever a system row exists for
+ * the student ANYWHERE in the academic year, even in the rare case a
+ * different (human) row from another term is the one actually being
+ * displayed — so the button can't be exposed by picking a term other
+ * than the one the system decided in. Only a human decision with no
+ * system row anywhere in the year (any severity, including a permanent
+ * dismissal) gets a "Change decision" button.
  */
-function ExceededMarksCard({ termId, academicYearId, termLabel, canDecide, isCurrentAcademicYear, academicYearName }) {
-  const [students, setStudents] = useState(null);
-  const [target, setTarget] = useState(null);
+function DeliberatedStudentsCard({ students, termLabel, canDecide, canDecideNow, onDecide }) {
   const [pickedId, setPickedId] = useState("");
+  const picked = students.find((s) => String(s.studentId) === String(pickedId)) || null;
+  const pickedBySystem = !!picked?.deliberation?.bySystem;
+  // `locked` covers bySystem plus the (now server-blocked, but just in
+  // case of old data) case where a human row in a different term is
+  // what's displayed while a system row also exists for this student
+  // this year — either way, no "Change decision" button.
+  const pickedLocked = !!picked?.deliberation?.locked;
 
-  function refresh() {
-    if (!termId || !academicYearId) {
-      setStudents([]);
-      return;
-    }
-    getExceededStudents({ termId, academicYearId })
-      .then(setStudents)
-      .catch(() => setStudents([]));
-  }
-
+  // If the picked student drops out of the list (term/year switched),
+  // fall back to the empty "Select a student..." state instead of
+  // showing stale details.
   useEffect(() => {
-    refresh();
-    setPickedId("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [termId, academicYearId]);
-
-  const pending = useMemo(() => students?.filter((s) => !s.deliberation) ?? [], [students]);
-  const deliberated = useMemo(() => students?.filter((s) => s.deliberation) ?? [], [students]);
-  const picked = deliberated.find((s) => String(s.studentId) === String(pickedId)) || null;
-
-  // Deliberation is only ever a "right now" call — the list itself (and
-  // any decision already on record) stays visible for older years so
-  // history can still be reviewed, but making or undoing a decision is
-  // reserved for the current academic year.
-  const canDecideNow = canDecide && isCurrentAcademicYear;
-
-  // Nothing loaded yet, or nobody's exceeded their marks at all this term
-  // — neither section renders, rather than taking up space with an empty
-  // state every time things are fine.
-  if (!students || students.length === 0) return null;
+    if (pickedId && !students.some((s) => String(s.studentId) === String(pickedId))) {
+      setPickedId("");
+    }
+  }, [students, pickedId]);
 
   return (
-    <>
-      {canDecide && !isCurrentAcademicYear && (
-        <NotCurrentYearNotice yearName={academicYearName} action="deliberation decisions can only be made" />
-      )}
+    <Card
+      className="min-h-[10rem]"
+      title={
+        <span className="inline-flex items-center gap-2">
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+            <CheckCircle2 size={12} />
+          </span>
+          Deliberated students
+        </span>
+      }
+      subtitle={`${students.length} student${students.length === 1 ? "" : "s"} already decided for ${termLabel || "this term"} — pick a name to see the decision.`}
+    >
+      <div>
+        <Field label="Student">
+          <Select value={pickedId} onChange={(e) => setPickedId(e.target.value)}>
+            <option value="">Select a student...</option>
+            {students.map((s) => (
+              <option key={s.studentId} value={s.studentId}>
+                {s.firstName} {s.lastName} — {decisionLabel(s.deliberation.decision, termLabel)}
+              </option>
+            ))}
+          </Select>
+        </Field>
 
-      {pending.length > 0 && (
-        <Card
-          title={
-            <span className="inline-flex items-center gap-2">
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
-                <Clock size={12} />
-              </span>
-              Awaiting deliberation
-            </span>
-          }
-          subtitle={`${pending.length} student${pending.length === 1 ? "" : "s"} exceeded their conduct marks for ${termLabel || "this term"} and still need${pending.length === 1 ? "s" : ""} a decision.`}
-        >
-          <Table>
-            <Thead>
-              <tr>
-                <Th>Student</Th>
-                <Th>Marks</Th>
-                {canDecide && <Th className="text-right">Action</Th>}
-              </tr>
-            </Thead>
-            <tbody>
-              {pending.map((s) => (
-                <tr key={s.studentId}>
-                  <Td className="font-medium text-slate-800">
-                    {s.firstName} {s.lastName}
-                    <span className="block text-xs font-normal text-slate-400">
-                      {s.className || "—"} · {s.admissionNumber || "—"}
-                    </span>
-                  </Td>
-                  <Td>
-                    <Badge tone="danger">-{s.score.deducted}</Badge>
-                  </Td>
-                  {canDecide && (
-                    <Td className="text-right">
-                      <Button size="sm" variant="secondary" onClick={() => setTarget(s)} disabled={!canDecideNow}>
-                        <Gavel size={13} /> Decide
-                      </Button>
-                    </Td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </Card>
-      )}
-
-      {deliberated.length > 0 && (
-        <Card
-          title={
-            <span className="inline-flex items-center gap-2">
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-                <CheckCircle2 size={12} />
-              </span>
-              Deliberated students
-            </span>
-          }
-          subtitle={`${deliberated.length} student${deliberated.length === 1 ? "" : "s"} already decided for ${termLabel || "this term"} — pick a name to see the decision.`}
-        >
-          <Field label="Student">
-            <Select value={pickedId} onChange={(e) => setPickedId(e.target.value)}>
-              <option value="">Select a student...</option>
-              {deliberated.map((s) => (
-                <option key={s.studentId} value={s.studentId}>
-                  {s.firstName} {s.lastName} — {DECISION_LABEL[s.deliberation.decision]}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          {picked && (
-            <div className="mt-3 flex flex-col gap-2 rounded-xl border border-slate-200 p-4">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="text-sm font-semibold text-slate-800">
-                    {picked.firstName} {picked.lastName}
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {picked.className || "—"} · {picked.admissionNumber || "No admission no."}
-                  </p>
-                </div>
-                <Badge tone="danger">-{picked.score.deducted}</Badge>
+        {picked && (
+          <div className="mt-3 flex flex-col gap-2 rounded-xl border border-slate-200 p-4">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold text-slate-800">
+                  {picked.firstName} {picked.lastName}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {picked.className || "—"} · {picked.admissionNumber || "No admission no."}
+                </p>
               </div>
-              <Badge tone={DECISION_TONE[picked.deliberation.decision]}>{DECISION_LABEL[picked.deliberation.decision]}</Badge>
-              {picked.deliberation.reason && <p className="text-sm text-slate-600">{picked.deliberation.reason}</p>}
-              <p className="text-xs text-slate-400">
-                by {picked.deliberation.decidedBy || "—"} · {fmtDate(picked.deliberation.decidedAt)}
-              </p>
-              {canDecide && (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setTarget(picked)}
-                  disabled={!canDecideNow}
-                  className="mt-1 self-start"
-                >
-                  <Gavel size={13} /> Change decision
-                </Button>
-              )}
+              <Badge tone="danger">
+                -{picked.score.deducted}
+                {picked.exceededYear ? ` (term) / -${picked.yearScore.deducted} (year)` : ""}
+              </Badge>
             </div>
-          )}
-        </Card>
-      )}
-
-      {target && (
-        <DeliberationModal
-          student={target}
-          termId={termId}
-          academicYearId={academicYearId}
-          isCurrentAcademicYear={isCurrentAcademicYear}
-          onClose={() => setTarget(null)}
-          onSaved={() => {
-            setTarget(null);
-            refresh();
-          }}
-        />
-      )}
-    </>
+            <p className="text-xs text-slate-400">{exceededReasonLabel(picked)}</p>
+            <TextBadge tone={DECISION_TONE[picked.deliberation.decision]} className={DECISION_EMPHASIS[picked.deliberation.decision]}>
+              {decisionLabel(picked.deliberation.decision, picked.deliberation.termName || termLabel)}
+            </TextBadge>
+            {picked.deliberation.reason && <p className="text-sm text-slate-600">{picked.deliberation.reason}</p>}
+            <p className="text-xs text-slate-400">
+              {pickedBySystem ? (
+                <span className="inline-flex items-center gap-1 text-violet-700">
+                  <Cpu size={11} /> Auto-dismissed by the system
+                </span>
+              ) : (
+                <>by {picked.deliberation.decidedBy || "—"} · {fmtDate(picked.deliberation.decidedAt)}</>
+              )}
+              {picked.deliberation.termName && picked.deliberation.termName !== termLabel && (
+                <> · decided in {picked.deliberation.termName}</>
+              )}
+            </p>
+            {pickedBySystem && (
+              <p className="text-xs text-violet-700">
+                Exceeded half the year's conduct marks — this is a computed decision, not a discretionary one, and
+                can't be undone or changed.
+              </p>
+            )}
+            {!pickedBySystem && pickedLocked && (
+              <p className="text-xs text-violet-700">
+                The system also auto-dismissed {picked.firstName} elsewhere this year — that decision stands and
+                can't be superseded from another term.
+              </p>
+            )}
+            {canDecide && !pickedLocked && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onDecide(picked)}
+                disabled={!canDecideNow}
+                className="mt-1 self-start"
+              >
+                <Gavel size={13} /> Change decision
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 
 /** Modal to record (or change/undo) the discipline office's call on one exceeded student. */
 function DeliberationModal({ student, termId, academicYearId, isCurrentAcademicYear = true, onClose, onSaved }) {
   const confirm = useConfirm();
+  // A system-authored row (see applySystemYearlyDismissals) is a computed
+  // fact, not a discretionary staff call — undecide() rejects it
+  // server-side no matter who asks, so editing/undoing is hidden here too
+  // rather than letting staff tap it and hit an error. Any decision
+  // discipline staff actually made themselves — including a permanent
+  // dismissal — stays fully editable and undoable.
+  const bySystem = !!student.deliberation?.bySystem;
   const [decision, setDecision] = useState(student.deliberation?.decision || "");
   const [reason, setReason] = useState(student.deliberation?.reason || "");
   const [saving, setSaving] = useState(false);
@@ -860,7 +905,7 @@ function DeliberationModal({ student, termId, academicYearId, isCurrentAcademicY
       title={`Deliberation — ${student.firstName} ${student.lastName}`}
       footer={
         <>
-          {student.deliberation && (
+          {student.deliberation && !bySystem && (
             <Button variant="ghost" onClick={handleUndo} disabled={saving || undoing || !isCurrentAcademicYear}>
               <Undo2 size={14} /> {undoing ? "Undoing..." : "Undo decision"}
             </Button>
@@ -868,28 +913,43 @@ function DeliberationModal({ student, termId, academicYearId, isCurrentAcademicY
           <Button variant="ghost" onClick={onClose} disabled={saving || undoing}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={saving || undoing || !isCurrentAcademicYear}>
-            {saving ? "Saving..." : "Save decision"}
-          </Button>
+          {!bySystem && (
+            <Button onClick={handleSave} disabled={saving || undoing || !isCurrentAcademicYear}>
+              {saving ? "Saving..." : "Save decision"}
+            </Button>
+          )}
         </>
       }
     >
       <div className="flex flex-col gap-3">
         {!isCurrentAcademicYear && <NotCurrentYearNotice action="deliberation decisions can only be made" />}
+        {bySystem ? (
+          <p className="text-sm rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-violet-700">
+            {student.firstName} was dismissed automatically by the system for using up half of this academic year's
+            conduct marks{student.deliberation?.termName ? ` (recorded in ${student.deliberation.termName})` : ""}.
+            This is a computed decision, not a discretionary staff call — it can't be undone or changed.
+          </p>
+        ) : null}
         <p className="text-sm text-slate-500">
           {student.firstName} has used {student.score.deducted} of {student.score.maxMarks} marks this term
           ({student.score.remaining <= 0 ? "none remaining" : `${student.score.remaining} remaining`}).
+          {student.exceededYear && (
+            <>
+              {" "}Cumulatively for the year, {student.firstName} has used {student.yearScore.deducted} of{" "}
+              {student.yearScore.maxMarks} marks — past the recommended-dismissal line.
+            </>
+          )}
         </p>
         <Field label="Decision">
-          <Select value={decision} onChange={(e) => setDecision(e.target.value)} disabled={!isCurrentAcademicYear}>
+          <Select value={decision} onChange={(e) => setDecision(e.target.value)} disabled={!isCurrentAcademicYear || bySystem}>
             <option value="">Select...</option>
             <option value="dismissed_permanently">Dismiss permanently</option>
             <option value="dismissed_term">Dismiss for this term</option>
-            <option value="retained">Retain student</option>
+            <option value="stained">Stain record (retain student)</option>
           </Select>
         </Field>
         <Field label="Reason / notes (optional)">
-          <Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} disabled={!isCurrentAcademicYear} />
+          <Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} disabled={!isCurrentAcademicYear || bySystem} />
         </Field>
         <ErrorText>{error}</ErrorText>
       </div>
@@ -912,6 +972,8 @@ function timeOfDayGreeting() {
 export default function Dashboard() {
   const { user } = useAuth();
   const [records, setRecords] = useState(null);
+  const [exceededStudents, setExceededStudents] = useState(null);
+  const [deliberationTarget, setDeliberationTarget] = useState(null);
   const showOverview = CAN_SEE_QUEUE.includes(user.sbmsRole);
   const showMyReports = user.sbmsRole === "reporter";
   const scope = useScopePicker({ needsStudent: false });
@@ -926,6 +988,16 @@ export default function Dashboard() {
       .catch(() => setRecords([]));
   }
 
+  function refreshExceeded() {
+    if (!scope.academicYearId || !scope.termId) {
+      setExceededStudents([]);
+      return;
+    }
+    getExceededStudents({ termId: scope.termId, academicYearId: scope.academicYearId })
+      .then(setExceededStudents)
+      .catch(() => setExceededStudents([]));
+  }
+
   useEffect(() => {
     if (!showOverview && !showMyReports) return;
     // The dashboard is a "what's happening right now" view, filtered to
@@ -937,6 +1009,18 @@ export default function Dashboard() {
     refreshRecords();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.sbmsRole, scope.academicYearId, scope.termId]);
+
+  useEffect(() => {
+    if (!showOverview) return;
+    refreshExceeded();
+    setDeliberationTarget(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showOverview, scope.academicYearId, scope.termId]);
+
+  const pendingDeliberation = useMemo(() => exceededStudents?.filter((s) => !s.deliberation) ?? [], [exceededStudents]);
+  const deliberatedStudents = useMemo(() => exceededStudents?.filter((s) => s.deliberation) ?? [], [exceededStudents]);
+  const canDecide = CAN_DECIDE.includes(user.sbmsRole);
+  const canDecideNow = canDecide && scope.isCurrentAcademicYear;
 
   const selectedTerm = scope.terms.find((t) => String(t.id) === String(scope.termId));
   const selectedYear = scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId));
@@ -954,8 +1038,8 @@ export default function Dashboard() {
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-2">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-slate-400 shrink-0">Year</span>
-            <PillSelect
-              options={scope.academicYears.map((y) => ({ id: y.id, label: y.name }))}
+            <YearSelect
+              options={scope.academicYears.map((y) => ({ id: y.id, label: y.name, isCurrent: y.isCurrent }))}
               value={scope.academicYearId}
               onChange={scope.setAcademicYearId}
             />
@@ -971,16 +1055,51 @@ export default function Dashboard() {
         </div>
       )}
 
-      {showOverview && <DisciplineOverview records={records} />}
       {showOverview && (
-        <ExceededMarksCard
-          termId={scope.termId}
-          academicYearId={scope.academicYearId}
-          termLabel={termLabel}
-          canDecide={CAN_DECIDE.includes(user.sbmsRole)}
-          isCurrentAcademicYear={scope.isCurrentAcademicYear}
-          academicYearName={selectedYear?.name}
-        />
+        <>
+          {canDecide && !scope.isCurrentAcademicYear && exceededStudents?.length > 0 && (
+            <div className="mb-4">
+              <NotCurrentYearNotice yearName={selectedYear?.name} action="deliberation decisions can only be made" />
+            </div>
+          )}
+
+          <div className={`grid gap-5 items-start ${deliberatedStudents.length > 0 ? "lg:grid-cols-2" : ""}`}>
+            <DisciplineOverview records={records} />
+            {deliberatedStudents.length > 0 && (
+              <DeliberatedStudentsCard
+                students={deliberatedStudents}
+                termLabel={termLabel}
+                canDecide={canDecide}
+                canDecideNow={canDecideNow}
+                onDecide={setDeliberationTarget}
+              />
+            )}
+          </div>
+
+          {pendingDeliberation.length > 0 && (
+            <PendingDeliberationCard
+              students={pendingDeliberation}
+              termLabel={termLabel}
+              canDecide={canDecide}
+              canDecideNow={canDecideNow}
+              onDecide={setDeliberationTarget}
+            />
+          )}
+
+          {deliberationTarget && (
+            <DeliberationModal
+              student={deliberationTarget}
+              termId={deliberationTarget.deliberation?.termId || scope.termId}
+              academicYearId={scope.academicYearId}
+              isCurrentAcademicYear={scope.isCurrentAcademicYear}
+              onClose={() => setDeliberationTarget(null)}
+              onSaved={() => {
+                setDeliberationTarget(null);
+                refreshExceeded();
+              }}
+            />
+          )}
+        </>
       )}
       {showMyReports && (
         <MyReportsOverview
@@ -992,10 +1111,11 @@ export default function Dashboard() {
         />
       )}
 
+      {!showMyReports && (
       <div>
         <p className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Quick actions</p>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {["manager", "disciplinary_officer", "reporter"].includes(user.sbmsRole) && (
+          {["manager", "disciplinary_officer"].includes(user.sbmsRole) && (
             <QuickAction
               to="/report"
               icon={FlagTriangleRight}
@@ -1051,6 +1171,7 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -1059,7 +1180,7 @@ function QuickAction({ to, icon: Icon, title, description }) {
   return (
     <Link
       to={to}
-      className="flex items-start gap-3 bg-white border border-slate-200 rounded-xl p-3.5 hover:border-brand-200 hover:shadow-sm transition"
+      className="flex items-start gap-3 bg-white border border-slate-200 rounded-xl p-3.5 transition-all duration-200 hover:-translate-y-1 hover:border-brand-200 hover:shadow-md"
     >
       <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600 shrink-0">
         <Icon size={18} />

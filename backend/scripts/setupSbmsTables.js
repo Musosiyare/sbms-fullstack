@@ -1,6 +1,17 @@
 require("dotenv").config();
 const sequelize = require("../src/config/database");
-const { MisconductType, MisconductRecord, MisconductEvidence, Discussion, DiscussionMessage, Deliberation } = require("../src/models");
+const {
+  MisconductType,
+  MisconductRecord,
+  MisconductEvidence,
+  Discussion,
+  DiscussionMessage,
+  Deliberation,
+  SmsLog,
+  ActivityLog,
+  NotificationSeen,
+  NotificationRead,
+} = require("../src/models");
 
 /**
  * Creates/updates ONLY the tables SBMS owns: sbms_misconduct_types,
@@ -39,6 +50,18 @@ async function setup() {
 
     await Deliberation.sync({ alter: true });
     console.log("sbms_deliberations ready.");
+
+    await SmsLog.sync({ alter: true });
+    console.log("sbms_sms_logs ready.");
+
+    await ActivityLog.sync({ alter: true });
+    console.log("sbms_activity_logs ready.");
+
+    await NotificationSeen.sync({ alter: true });
+    console.log("sbms_notification_seen ready.");
+
+    await NotificationRead.sync({ alter: true });
+    console.log("sbms_notification_read ready.");
 
     console.log("Done. SBMS's own tables are set up — nothing else was touched.");
     console.log(

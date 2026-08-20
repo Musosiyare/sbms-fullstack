@@ -30,6 +30,7 @@ User.init(
     schoolId: { type: DataTypes.INTEGER, allowNull: true },
     name: { type: DataTypes.STRING, allowNull: false },
     email: { type: DataTypes.STRING, allowNull: false, unique: true },
+    phone: { type: DataTypes.STRING, allowNull: true },
     passwordHash: { type: DataTypes.STRING, allowNull: false },
     role: { type: DataTypes.ENUM("superuser", "manager", "teacher", "discipline"), allowNull: false },
     disciplineRole: {

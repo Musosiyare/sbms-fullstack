@@ -10,6 +10,22 @@ const TONES = {
   reporter: "bg-teal-50 text-teal-700 ring-1 ring-teal-200",
 };
 
+// Same color family as TONES above, text-only — no background fill, no
+// ring. Used where a decision/status needs to read as colored text
+// inline rather than a pill, e.g. the deliberation decision shown under
+// the Deliberated-students dropdown.
+const TEXT_TONES = {
+  neutral: "text-slate-600",
+  ok: "text-emerald-700",
+  warning: "text-amber-700",
+  danger: "text-red-700",
+  brand: "text-brand-600",
+  manager: "text-blue-700",
+  dod: "text-brand-600",
+  officer: "text-amber-700",
+  reporter: "text-teal-700",
+};
+
 export default function Badge({ children, tone = "neutral", className = "" }) {
   return (
     <span
@@ -18,4 +34,8 @@ export default function Badge({ children, tone = "neutral", className = "" }) {
       {children}
     </span>
   );
+}
+
+export function TextBadge({ children, tone = "neutral", className = "" }) {
+  return <span className={`inline-flex items-center gap-1 text-xs font-semibold ${TEXT_TONES[tone]} ${className}`}>{children}</span>;
 }

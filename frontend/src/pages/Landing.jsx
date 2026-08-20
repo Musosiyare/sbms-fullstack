@@ -519,7 +519,7 @@ export default function Landing() {
               <Reveal
                 key={f.title}
                 delay={(i % 3) * 100}
-                className="group rounded-2xl border border-slate-100 bg-white p-6 transition-shadow hover:shadow-md"
+                className="group rounded-2xl border border-slate-100 bg-white p-6 transition-all duration-200 hover:-translate-y-1 hover:shadow-md"
               >
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-500 transition-colors group-hover:bg-brand-500 group-hover:text-white">
                   <Icon size={19} strokeWidth={2.25} />

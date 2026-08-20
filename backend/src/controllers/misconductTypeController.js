@@ -1,9 +1,15 @@
-const { MisconductType, School } = require("../models");
-const { Op } = require("sequelize");
+const { MisconductType, MisconductRecord, School } = require("../models");
+const { Op, fn, col } = require("sequelize");
 const ApiError = require("../utils/ApiError");
 const { MARKS_PER_TERM } = require("../services/conductScoreService");
+const { logActivity } = require("../services/activityLogService");
 
-/** Global templates (schoolId null) plus this school's own types. */
+/**
+ * Global templates (schoolId null) plus this school's own types. Each type
+ * is annotated with recordsCount — how many MisconductRecords reference it
+ * — so the frontend can explain/skip the delete confirmation up front
+ * instead of only finding out it's blocked after confirming.
+ */
 async function list(req, res, next) {
   try {
     const where = req.schoolId
@@ -14,7 +20,18 @@ async function list(req, res, next) {
       include: [{ model: School, attributes: ["id", "name"] }],
       order: [["title", "ASC"]],
     });
-    res.json(types);
+
+    const counts = types.length
+      ? await MisconductRecord.findAll({
+          attributes: ["misconductTypeId", [fn("COUNT", col("id")), "count"]],
+          where: { misconductTypeId: { [Op.in]: types.map((t) => t.id) } },
+          group: ["misconductTypeId"],
+          raw: true,
+        })
+      : [];
+    const countByTypeId = new Map(counts.map((c) => [c.misconductTypeId, Number(c.count)]));
+
+    res.json(types.map((t) => ({ ...t.toJSON(), recordsCount: countByTypeId.get(t.id) || 0 })));
   } catch (err) {
     next(err);
   }
@@ -50,6 +67,19 @@ async function create(req, res, next) {
       requiresSendHome: sendHome,
       sendHomeDays: sendHome ? Number(sendHomeDays) : null,
     });
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      category: "misconduct_types",
+      action: "misconduct_type_created",
+      description: `${req.user.name} added misconduct type "${type.title}"`,
+      entityType: "MisconductType",
+      entityId: type.id,
+    });
+
     res.status(201).json(type);
   } catch (err) {
     next(err);
@@ -65,6 +95,24 @@ async function update(req, res, next) {
     }
 
     const { title, description, defaultDeduction, severity, isActive, requiresSendHome, sendHomeDays } = req.body;
+
+    // A deactivated type is frozen — the only change allowed on it is
+    // reactivating (isActive: true). Any other field change has to wait
+    // until it's active again, so nobody edits a type's title/deduction/
+    // etc. while it's sitting hidden from the picker.
+    const onlyTogglingActive =
+      isActive !== undefined &&
+      title === undefined &&
+      description === undefined &&
+      defaultDeduction === undefined &&
+      severity === undefined &&
+      requiresSendHome === undefined &&
+      sendHomeDays === undefined;
+    if (!type.isActive && !(isActive === true && onlyTogglingActive)) {
+      return next(
+        ApiError.badRequest("This misconduct type is deactivated — reactivate it before making any other changes.")
+      );
+    }
 
     if (defaultDeduction !== undefined && (Number(defaultDeduction) <= 0 || Number(defaultDeduction) > MARKS_PER_TERM)) {
       return next(
@@ -89,6 +137,21 @@ async function update(req, res, next) {
         sendHomeDays: nextRequiresSendHome ? Number(nextSendHomeDays) : null,
       }),
     });
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      category: "misconduct_types",
+      action: "misconduct_type_updated",
+      description: onlyTogglingActive
+        ? `${req.user.name} ${isActive ? "reactivated" : "deactivated"} misconduct type "${type.title}"`
+        : `${req.user.name} updated misconduct type "${type.title}"`,
+      entityType: "MisconductType",
+      entityId: type.id,
+    });
+
     res.json(type);
   } catch (err) {
     next(err);
@@ -102,9 +165,37 @@ async function remove(req, res, next) {
     if (type.schoolId !== req.schoolId) {
       return next(ApiError.forbidden("You can't delete another school's misconduct type"));
     }
-    // Soft-disable rather than hard delete — existing records reference this
-    // type and should keep showing its title/history correctly.
-    await type.update({ isActive: false });
+
+    // A real, permanent delete — but only when it's safe to do so. If any
+    // record (pending or finalized, any year) already references this
+    // type, removing the row would leave that record with no title/history
+    // to show. In that case, deactivating (isActive: false) is the right
+    // move instead — it disappears from the picker but existing records
+    // keep their title intact.
+    const inUse = await MisconductRecord.count({ where: { misconductTypeId: type.id } });
+    if (inUse > 0) {
+      return next(
+        ApiError.conflict(
+          `"${type.title}" is used by ${inUse} existing record${inUse === 1 ? "" : "s"} and can't be deleted — deactivate it instead so it stops appearing in the picker while keeping those records intact.`,
+          "MISCONDUCT_TYPE_IN_USE"
+        )
+      );
+    }
+
+    await type.destroy();
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      category: "misconduct_types",
+      action: "misconduct_type_deleted",
+      description: `${req.user.name} deleted misconduct type "${type.title}"`,
+      entityType: "MisconductType",
+      entityId: type.id,
+    });
+
     res.json({ success: true });
   } catch (err) {
     next(err);

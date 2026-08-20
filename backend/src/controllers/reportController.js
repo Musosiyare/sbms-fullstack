@@ -1,4 +1,5 @@
 const conductScoreService = require("../services/conductScoreService");
+const { MARKS_PER_TERM } = conductScoreService;
 const {
   Student,
   Class,
@@ -12,6 +13,7 @@ const {
 } = require("../models");
 const ApiError = require("../utils/ApiError");
 const { Op } = require("sequelize");
+const deliberationController = require("./deliberationController");
 
 const DISCIPLINE_ROLE_LABEL = { dean_of_discipline: "Dean of Discipline", disciplinary_officer: "Disciplinary Officer" };
 const ROLE_LABEL = { manager: "Manager", teacher: "Teacher", superuser: "Superuser", discipline: "Discipline Staff" };
@@ -22,7 +24,26 @@ function roleLabel(u) {
   return DISCIPLINE_ROLE_LABEL[u.disciplineRole] || ROLE_LABEL[u.role] || null;
 }
 
-/** Every student in a class, with both their termly and yearly score. */
+/**
+ * Whether the system has already auto-dismissed a student ANYWHERE in
+ * this academic year (see applySystemYearlyDismissals in
+ * deliberationController — always recorded against the year's LAST
+ * term). Used so a term viewed BEFORE that term — where
+ * getDeliberationForTerm finds nothing and getPermanentDismissalForYear's
+ * carry-over only looks forward — doesn't fall back to showing a
+ * per-term "At Risk"/"Good" judgment that's already moot: the system's
+ * year-level call has been made, so the class report should just show
+ * the plain marks number for that term instead of a status pill.
+ */
+async function hasSystemDeliberationForYear(studentId, academicYearId) {
+  const row = await Deliberation.findOne({
+    where: { studentId, academicYearId, decidedByRole: "system" },
+    attributes: ["id"],
+  });
+  return Boolean(row);
+}
+
+/** Every student in a class, with both their termly and yearly score, plus their recorded deliberation decision for this term (if any). */
 async function classReport(req, res, next) {
   try {
     const { classId, termId, academicYearId } = req.query;
@@ -30,7 +51,24 @@ async function classReport(req, res, next) {
       return next(ApiError.badRequest("classId, termId and academicYearId are required"));
     }
     const scores = await conductScoreService.getClassScores(classId, termId, academicYearId);
-    res.json(scores);
+    const withDeliberations = await Promise.all(
+      scores.map(async (s) => {
+        const deliberation = await getDeliberationForTerm(s.studentId, termId);
+        const permanentDismissal = await getPermanentDismissalForYear(s.studentId, academicYearId);
+        const carriedOverDismissal = dismissalCarriesIntoTerm(permanentDismissal, termId);
+        const systemDeliberationThisYear = await hasSystemDeliberationForYear(s.studentId, academicYearId);
+        return {
+          ...s,
+          deliberation,
+          carriedOverDismissal,
+          systemDeliberationThisYear,
+          term: carriedOverDismissal
+            ? { ...s.term, maxMarks: null, deducted: null, remaining: null, atRisk: null, notApplicable: true }
+            : s.term,
+        };
+      })
+    );
+    res.json(withDeliberations);
   } catch (err) {
     next(err);
   }
@@ -46,25 +84,209 @@ async function studentReport(req, res, next) {
       return next(ApiError.badRequest("termId and academicYearId are required"));
     }
 
-    const term = await conductScoreService.getTermScore(student.id, termId);
+    const rawTerm = await conductScoreService.getTermScore(student.id, termId);
     const year = await conductScoreService.getYearScore(student.id, academicYearId);
+    const deliberation = await getDeliberationForTerm(student.id, termId);
+    const permanentDismissal = await getPermanentDismissalForYear(student.id, academicYearId);
+    const carriedOverDismissal = dismissalCarriesIntoTerm(permanentDismissal, termId);
+    const term = carriedOverDismissal
+      ? { ...rawTerm, maxMarks: null, deducted: null, remaining: null, atRisk: null, notApplicable: true }
+      : rawTerm;
     res.json({
       student: { id: student.id, firstName: student.firstName, lastName: student.lastName },
       term,
       year,
+      deliberation,
+      carriedOverDismissal,
     });
   } catch (err) {
     next(err);
   }
 }
 
+/**
+ * The discipline office's actual recorded call for one student/term, if
+ * any — dismissed permanently, dismissed for the term, or stained (kept
+ * enrolled but the case stays on their record). Pulled from the same
+ * Deliberation table the dashboard's exceeded-marks deliberation flow
+ * writes to, so a report always reflects the real decision rather than
+ * just the computed marks percentage.
+ */
+async function getDeliberationForTerm(studentId, termId) {
+  const row = await Deliberation.findOne({
+    where: { studentId, termId },
+    include: [{ model: User, as: "decidedBy", attributes: ["id", "name", "role", "disciplineRole"] }],
+  });
+  if (!row) return null;
+  return {
+    id: row.id,
+    decision: row.decision,
+    reason: row.reason,
+    decidedBy: row.decidedBy?.name || null,
+    decidedByRole: roleLabel(row.decidedBy),
+    decidedAt: row.decidedAt,
+  };
+}
+
+/**
+ * Every deliberation decision recorded across a student's whole academic
+ * year (one per term at most), plus whichever one counts as "the" decision
+ * for the year: a permanent dismissal in any term overrides everything
+ * else, a term dismissal beats a stained record, and a stained record
+ * beats having no decision at all. Powers the yearly conduct report so it
+ * shows the discipline office's actual call rather than only the
+ * computed promoted/dismissed marks percentage.
+ */
+async function getDeliberationsForYear(studentId, academicYearId) {
+  const rows = await Deliberation.findAll({
+    where: { studentId, academicYearId },
+    include: [
+      { model: Term },
+      { model: User, as: "decidedBy", attributes: ["id", "name", "role", "disciplineRole"] },
+    ],
+    order: [["termId", "ASC"]],
+  });
+
+  const list = rows.map((row) => ({
+    id: row.id,
+    termId: row.termId,
+    termName: row.Term?.name || null,
+    decision: row.decision,
+    reason: row.reason,
+    decidedBy: row.decidedBy?.name || null,
+    decidedByRole: roleLabel(row.decidedBy),
+    decidedAt: row.decidedAt,
+  }));
+
+  const SEVERITY = { dismissed_permanently: 3, dismissed_term: 2, stained: 1 };
+  // A human decision governs over a system one whenever both exist — see
+  // applySystemYearlyDismissals in deliberationController for why the
+  // system shouldn't normally create a competing row once a human has
+  // already decided the student, but this stays defensive for older data.
+  const humanRows = rows.filter((row) => row.decidedByRole !== "system");
+  const pool = humanRows.length > 0 ? humanRows : rows;
+  const finalRow = pool.reduce((best, d) => (!best || SEVERITY[d.decision] > SEVERITY[best.decision] ? d : best), null);
+  const final = finalRow ? list.find((d) => d.id === finalRow.id) : null;
+
+  return { deliberations: list, finalDeliberation: final };
+}
+
+/**
+ * The earliest permanent-dismissal decision in a student's list of
+ * deliberations for the year, if any. `list` is already ordered by
+ * termId ASC (see getDeliberationsForYear), which matches how a school's
+ * terms are actually created — Term 1, 2, 3 — so `.find` naturally
+ * returns the one from the earliest term rather than whichever happens
+ * to be most recent.
+ */
+function findPermanentDismissal(deliberations) {
+  return deliberations.find((d) => d.decision === "dismissed_permanently") || null;
+}
+
+/**
+ * A student who's been permanently dismissed doesn't stay enrolled for
+ * the rest of the year, so a later term's "score" is really just an
+ * empty, untouched 40/40 — nobody is filing misconduct reports against a
+ * student who's no longer there. Left as-is, that reads as a clean
+ * record and quietly dilutes the yearly total back toward "promoted",
+ * which is exactly backwards. This replaces every term strictly after
+ * the dismissal with an explicit "not applicable" marker instead of a
+ * real score, and leaves the dismissal's own term (and anything before
+ * it) untouched.
+ */
+function applyPermanentDismissalCutoff(termScores, permanentDismissal) {
+  if (!permanentDismissal) return { terms: termScores, cutoffIndex: -1 };
+
+  const cutoffIndex = termScores.findIndex((t) => t.termId === permanentDismissal.termId);
+  if (cutoffIndex === -1) return { terms: termScores, cutoffIndex: -1 };
+
+  const terms = termScores.map((t, i) => {
+    if (i <= cutoffIndex) return t;
+    return {
+      ...t,
+      maxMarks: null,
+      deducted: null,
+      remaining: null,
+      atRisk: null,
+      incidentsCount: null,
+      notApplicable: true,
+      notApplicableReason: `Dismissed permanently in ${permanentDismissal.termName}`,
+    };
+  });
+
+  return { terms, cutoffIndex };
+}
+
+/**
+ * Re-totals the yearly figure using only the terms that actually counted
+ * (up to and including the term a permanent dismissal was recorded in),
+ * so the year's "remaining / maxMarks" reflects the real budget the
+ * student was ever scored against instead of the full 120 diluted by
+ * terms they weren't enrolled for. No-op when there's no cutoff.
+ */
+function recomputeYearAfterDismissal(year, termScores, cutoffIndex) {
+  if (cutoffIndex === -1) return year;
+  const countedTerms = termScores.slice(0, cutoffIndex + 1);
+  const maxMarks = MARKS_PER_TERM * countedTerms.length;
+  const deducted = countedTerms.reduce((sum, t) => sum + (t.deducted || 0), 0);
+  const remaining = maxMarks - deducted;
+  return {
+    ...year,
+    maxMarks,
+    deducted,
+    remaining,
+    recommendedDismissal: true,
+    decision: "dismissed",
+  };
+}
+
+/**
+ * The earliest permanent-dismissal Deliberation recorded for a student
+ * this academic year, if any — used by the termly (single-term) reports
+ * so a term viewed *after* the one a student was permanently dismissed in
+ * shows them as no longer enrolled rather than with a fresh, empty-looking
+ * score. Ordered by termId ASC to match Term 1/2/3 creation order, same
+ * assumption used everywhere else in this file.
+ */
+async function getPermanentDismissalForYear(studentId, academicYearId) {
+  const row = await Deliberation.findOne({
+    where: { studentId, academicYearId, decision: "dismissed_permanently" },
+    include: [{ model: Term }],
+    order: [["termId", "ASC"]],
+  });
+  if (!row) return null;
+  return { termId: row.termId, termName: row.Term?.name || null, decidedAt: row.decidedAt };
+}
+
+/**
+ * Whether a permanent dismissal recorded earlier in the year should carry
+ * over into the given term — i.e. the dismissal happened in a strictly
+ * earlier term than the one being viewed. The dismissal's own term keeps
+ * showing its real score; only later terms are affected.
+ */
+function dismissalCarriesIntoTerm(permanentDismissal, termId) {
+  return Boolean(permanentDismissal) && Number(permanentDismissal.termId) < Number(termId) ? permanentDismissal : null;
+}
+
 /** Score + incident list for one student, for a given term — shared by the single and bulk conduct-report endpoints. */
 async function buildStudentConductData(student, termId, academicYearId) {
-  const score = await conductScoreService.getTermScore(student.id, termId);
+  const rawScore = await conductScoreService.getTermScore(student.id, termId);
+  const permanentDismissal = await getPermanentDismissalForYear(student.id, academicYearId);
+  const carriedOverDismissal = dismissalCarriesIntoTerm(permanentDismissal, termId);
+  const score = carriedOverDismissal
+    ? { ...rawScore, maxMarks: null, deducted: null, remaining: null, atRisk: null, notApplicable: true }
+    : rawScore;
   // Termly status only — "good" or "at risk" against the 50% mark. The
   // actual promote/dismiss call is made at year end by combining all three
-  // terms (see conductScoreService.getYearScore), not here.
-  const status = score.atRisk ? "at_risk" : "good";
+  // terms (see conductScoreService.getYearScore), not here. The recorded
+  // deliberation decision (if any) is a separate, real staff call and is
+  // attached below rather than derived from this percentage. A student
+  // already permanently dismissed in an earlier term isn't "good" or "at
+  // risk" this term — they're simply not enrolled, so that gets its own
+  // status instead of a misleading computed one.
+  const status = carriedOverDismissal ? "dismissed_permanently" : score.atRisk ? "at_risk" : "good";
+  const deliberation = await getDeliberationForTerm(student.id, termId);
+  const systemDeliberationThisYear = await hasSystemDeliberationForYear(student.id, academicYearId);
 
   const records = await MisconductRecord.findAll({
     where: { studentId: student.id, termId, academicYearId },
@@ -87,6 +309,9 @@ async function buildStudentConductData(student, termId, academicYearId) {
     },
     score,
     status,
+    deliberation,
+    carriedOverDismissal,
+    systemDeliberationThisYear,
     incidents: records.map((r) => ({
       id: r.id,
       date: r.finalizedAt || r.createdAt,
@@ -140,7 +365,7 @@ async function studentConductReport(req, res, next) {
     // currently holds that role for this school as the footer contact.
     const dean = await User.findOne({
       where: { schoolId: req.schoolId, disciplineRole: "dean_of_discipline", status: "active" },
-      attributes: ["id", "name", "email"],
+      attributes: ["id", "name", "email", "phone"],
       order: [["id", "ASC"]],
     });
 
@@ -152,7 +377,7 @@ async function studentConductReport(req, res, next) {
       academicYear: { id: academicYear.id, name: academicYear.name },
       term: { id: term.id, name: term.name },
       ...conduct,
-      deanOfDiscipline: dean ? { name: dean.name, email: dean.email } : null,
+      deanOfDiscipline: dean ? { name: dean.name, phone: dean.phone } : null,
       generatedAt: new Date().toISOString(),
     });
   } catch (err) {
@@ -188,7 +413,7 @@ async function classConductReport(req, res, next) {
 
     const dean = await User.findOne({
       where: { schoolId: req.schoolId, disciplineRole: "dean_of_discipline", status: "active" },
-      attributes: ["id", "name", "email"],
+      attributes: ["id", "name", "email", "phone"],
       order: [["id", "ASC"]],
     });
 
@@ -200,7 +425,7 @@ async function classConductReport(req, res, next) {
       class: { id: klass.id, name: klass.name },
       academicYear: { id: academicYear.id, name: academicYear.name },
       term: { id: term.id, name: term.name },
-      deanOfDiscipline: dean ? { name: dean.name, email: dean.email } : null,
+      deanOfDiscipline: dean ? { name: dean.name, phone: dean.phone } : null,
       generatedAt: new Date().toISOString(),
       students: reports,
     });
@@ -233,11 +458,15 @@ async function studentYearlyConductReport(req, res, next) {
 
     const dean = await User.findOne({
       where: { schoolId: req.schoolId, disciplineRole: "dean_of_discipline", status: "active" },
-      attributes: ["id", "name", "email"],
+      attributes: ["id", "name", "email", "phone"],
       order: [["id", "ASC"]],
     });
 
     const { terms, year, incidents } = await conductScoreService.getYearlyReport(student.id, academicYearId);
+    const { deliberations, finalDeliberation } = await getDeliberationsForYear(student.id, academicYearId);
+    const permanentDismissal = findPermanentDismissal(deliberations);
+    const { terms: adjustedTerms, cutoffIndex } = applyPermanentDismissalCutoff(terms, permanentDismissal);
+    const adjustedYear = recomputeYearAfterDismissal(year, terms, cutoffIndex);
 
     res.json({
       school: { id: school.id, name: school.name },
@@ -251,10 +480,11 @@ async function studentYearlyConductReport(req, res, next) {
         guardianName: student.guardianName,
         guardianPhone: student.guardianPhone,
       },
-      terms,
-      year,
+      terms: adjustedTerms,
+      year: { ...adjustedYear, deliberation: finalDeliberation },
+      deliberations,
       incidents,
-      deanOfDiscipline: dean ? { name: dean.name, email: dean.email } : null,
+      deanOfDiscipline: dean ? { name: dean.name, phone: dean.phone } : null,
       generatedAt: new Date().toISOString(),
     });
   } catch (err) {
@@ -265,6 +495,9 @@ async function studentYearlyConductReport(req, res, next) {
 /**
  * Every active student in a class with their yearly score and promotion/
  * dismissal decision — the year-end counterpart to classConductReport.
+ * Each student's real Deliberation decision (if any was recorded this
+ * year) is attached the same way as the single-student yearly report, so
+ * both stay consistent.
  */
 async function classYearlyConductReport(req, res, next) {
   try {
@@ -282,19 +515,33 @@ async function classYearlyConductReport(req, res, next) {
 
     const dean = await User.findOne({
       where: { schoolId: req.schoolId, disciplineRole: "dean_of_discipline", status: "active" },
-      attributes: ["id", "name", "email"],
+      attributes: ["id", "name", "email", "phone"],
       order: [["id", "ASC"]],
     });
 
     const students = await conductScoreService.getClassYearlyReport(classId, academicYearId);
+    const withDeliberations = await Promise.all(
+      students.map(async (s) => {
+        const { deliberations, finalDeliberation } = await getDeliberationsForYear(s.studentId, academicYearId);
+        const permanentDismissal = findPermanentDismissal(deliberations);
+        const { terms: adjustedTerms, cutoffIndex } = applyPermanentDismissalCutoff(s.terms, permanentDismissal);
+        const adjustedYear = recomputeYearAfterDismissal(s.year, s.terms, cutoffIndex);
+        return {
+          ...s,
+          terms: adjustedTerms,
+          year: { ...adjustedYear, deliberation: finalDeliberation },
+          deliberations,
+        };
+      })
+    );
 
     res.json({
       school: { id: school.id, name: school.name },
       class: { id: klass.id, name: klass.name },
       academicYear: { id: academicYear.id, name: academicYear.name },
-      deanOfDiscipline: dean ? { name: dean.name, email: dean.email } : null,
+      deanOfDiscipline: dean ? { name: dean.name, phone: dean.phone } : null,
       generatedAt: new Date().toISOString(),
-      students,
+      students: withDeliberations,
     });
   } catch (err) {
     next(err);
@@ -305,13 +552,18 @@ const DISMISSAL_DECISIONS = ["dismissed_permanently", "dismissed_term"];
 
 /**
  * Every dismissed student in the school for a given academic year —
- * "dismissed permanently" (expelled outright, any term) and "dismissed
- * for the term" (out for the remainder of whichever term they were
- * decided in) pulled from the same Deliberation table the dashboard's
- * exceeded-marks deliberation flow writes to. This is the read side: a
- * school-wide list rather than one class/term at a time, so the
- * discipline office can see everyone dismissed across the whole year at
- * a glance.
+ * "dismissed permanently" (expelled outright, any term — including every
+ * student the system itself has auto-dismissed for crossing half the
+ * year's cumulative marks; see
+ * deliberationController.applySystemYearlyDismissals) and "dismissed for
+ * the term" (out for the remainder of whichever term they were decided
+ * in). All pulled from the same Deliberation table the dashboard's
+ * exceeded-marks deliberation flow writes to — a system decision and a
+ * staff decision are stored, and shown, exactly the same way here,
+ * distinguished only by "Decided by" reading "System" instead of a
+ * person's name. This is the read side: a school-wide list rather than
+ * one class/term at a time, so the discipline office can see everyone
+ * dismissed across the whole year at a glance.
  *
  * Filters:
  * - academicYearId (required): which year's decisions to pull.
@@ -337,6 +589,11 @@ async function dismissedStudentsReport(req, res, next) {
       }
     }
 
+    // Reconcile any student who's newly crossed the yearly threshold into
+    // a real dismissed_permanently row before reading, so this report is
+    // never stale relative to the numbers.
+    await deliberationController.applySystemYearlyDismissals(req.schoolId, academicYearId);
+
     let decisions = DISMISSAL_DECISIONS;
     if (decision && decision !== "all") {
       if (!DISMISSAL_DECISIONS.includes(decision)) {
@@ -356,7 +613,7 @@ async function dismissedStudentsReport(req, res, next) {
       School.findByPk(req.schoolId),
       User.findOne({
         where: { schoolId: req.schoolId, disciplineRole: "dean_of_discipline", status: "active" },
-        attributes: ["id", "name", "email"],
+        attributes: ["id", "name", "email", "phone"],
         order: [["id", "ASC"]],
       }),
       Deliberation.findAll({
@@ -389,15 +646,15 @@ async function dismissedStudentsReport(req, res, next) {
         termName: d.Term?.name || null,
         decision: d.decision,
         reason: d.reason,
-        decidedBy: d.decidedBy?.name || null,
-        decidedByRole: roleLabel(d.decidedBy),
+        decidedBy: deliberationController.decidedByDisplay(d),
+        decidedByRole: d.decidedByRole === "system" ? "System" : roleLabel(d.decidedBy),
         decidedAt: d.decidedAt,
       }));
 
     res.json({
       school: { id: school.id, name: school.name },
       academicYear: { id: academicYear.id, name: academicYear.name },
-      deanOfDiscipline: dean ? { name: dean.name, email: dean.email } : null,
+      deanOfDiscipline: dean ? { name: dean.name, phone: dean.phone } : null,
       generatedAt: new Date().toISOString(),
       students: results,
     });
@@ -430,7 +687,7 @@ async function weekendPermission(req, res, next) {
       include: [
         { model: Student },
         { model: MisconductType },
-        { model: User, as: "finalizedBy", attributes: ["id", "name", "email", "disciplineRole"] },
+        { model: User, as: "finalizedBy", attributes: ["id", "name", "email", "phone", "disciplineRole"] },
       ],
     });
     if (!record || record.schoolId !== req.schoolId) return next(ApiError.notFound("Record not found"));
@@ -458,7 +715,7 @@ async function weekendPermission(req, res, next) {
     if (!dean) {
       dean = await User.findOne({
         where: { schoolId: req.schoolId, disciplineRole: "dean_of_discipline", status: "active" },
-        attributes: ["id", "name", "email"],
+        attributes: ["id", "name", "email", "phone"],
         order: [["id", "ASC"]],
       });
     }
@@ -481,7 +738,7 @@ async function weekendPermission(req, res, next) {
       sentHomeFrom: record.sentHomeFrom,
       sentHomeTo: record.sentHomeTo,
       isExpired,
-      deanOfDiscipline: dean ? { name: dean.name, email: dean.email } : null,
+      deanOfDiscipline: dean ? { name: dean.name, phone: dean.phone } : null,
       generatedAt: new Date().toISOString(),
     });
   } catch (err) {

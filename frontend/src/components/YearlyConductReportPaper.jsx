@@ -3,6 +3,28 @@ function formatDate(value) {
   return new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+const DELIBERATION_META = {
+  dismissed_permanently: {
+    label: "Dismissed Permanently",
+    className: "text-red-700",
+    emphasisClassName: "font-display font-extrabold tracking-wide",
+  },
+  dismissed_term: {
+    label: "Dismissed for the Term",
+    className: "text-amber-600",
+    emphasisClassName: "font-display font-extrabold tracking-wide",
+  },
+  stained: { label: "Stained (Retained)", className: "text-slate-700", emphasisClassName: "" },
+};
+
+// Each term gets its own accent color so the per-term incident cards are
+// easy to tell apart at a glance without relying on the header text alone.
+const TERM_ACCENTS = [
+  { bar: "bg-teal-700", chip: "bg-teal-50 text-teal-800 border-teal-200" },
+  { bar: "bg-indigo-700", chip: "bg-indigo-50 text-indigo-800 border-indigo-200" },
+  { bar: "bg-amber-600", chip: "bg-amber-50 text-amber-800 border-amber-200" },
+];
+
 /**
  * The year-end conduct report: every term's score laid side by side, the
  * combined yearly total, and the promotion/dismissal decision — the
@@ -12,9 +34,11 @@ function formatDate(value) {
  * page).
  */
 export default function YearlyConductReportPaper({ report }) {
-  const { school, class: klass, academicYear, student, terms, year, incidents, deanOfDiscipline } = report;
+  const { school, class: klass, academicYear, student, terms, year, deliberations, incidents, deanOfDiscipline } =
+    report;
   const percent = Math.max(0, Math.round((year.remaining / year.maxMarks) * 100));
   const promoted = year.decision === "promoted";
+  const deliberation = year.deliberation || null;
 
   return (
     <div
@@ -23,9 +47,9 @@ export default function YearlyConductReportPaper({ report }) {
     >
       <div className="flex h-full flex-col">
         {/* Header */}
-        <div className="flex items-start justify-between gap-6 pb-4 border-b-2 border-slate-800">
+        <div className="flex items-start justify-between gap-6 pb-4 border-b-[3px] border-teal-950">
           <div className="space-y-0.5">
-            <p className="text-xl font-bold tracking-wide uppercase">{school.name}</p>
+            <p className="font-display text-xl font-extrabold tracking-wide uppercase text-teal-950">{school.name}</p>
             <p className="text-sm">
               <span className="font-semibold">Class:</span> {klass.name}
             </p>
@@ -34,7 +58,7 @@ export default function YearlyConductReportPaper({ report }) {
             </p>
             <p className="text-sm">
               <span className="font-semibold">Student:</span> {student.firstName} {student.lastName}
-              {student.admissionNumber ? ` (${student.admissionNumber})` : ""}
+              {student.admissionNumber && <span className="font-bold"> {student.admissionNumber}</span>}
             </p>
             {(student.guardianName || student.guardianPhone) && (
               <p className="text-sm">
@@ -51,106 +75,139 @@ export default function YearlyConductReportPaper({ report }) {
 
         {/* Title */}
         <h1 className="text-center text-lg font-bold uppercase tracking-wide mt-6 mb-6">
-          Yearly Conduct Report — {academicYear.name}
+          Yearly Conduct Report — 2026-2027
         </h1>
 
-        {/* Per-term breakdown */}
-        <table className="w-full text-sm border-collapse mb-6">
+        {/* Per-term summary — marks and incident counts together, one row
+            per term, so the whole year's picture is a single table instead
+            of a marks table plus a separate incidents table. */}
+        <table className="w-auto text-xs border-collapse mb-6 rounded-md overflow-hidden shadow-sm">
           <thead>
-            <tr className="bg-slate-100">
-              <th className="border border-slate-300 px-3 py-2 text-left">Term</th>
-              <th className="border border-slate-300 px-3 py-2 text-center w-28">Max marks</th>
-              <th className="border border-slate-300 px-3 py-2 text-center w-28">Deducted</th>
-              <th className="border border-slate-300 px-3 py-2 text-center w-28">Remaining</th>
+            <tr className="bg-teal-950">
+              <th className="border border-slate-300 px-2.5 py-1.5 text-left font-bold text-white">Term</th>
+              <th className="border border-slate-300 px-2.5 py-1.5 text-center w-20 font-bold text-white">Max marks</th>
+              <th className="border border-slate-300 px-2.5 py-1.5 text-center w-20 font-bold text-white">Deducted</th>
+              <th className="border border-slate-300 px-2.5 py-1.5 text-center w-20 font-bold text-white">Remaining</th>
+              <th className="border border-slate-300 px-2.5 py-1.5 text-center w-20 font-bold text-white">Incidents</th>
             </tr>
           </thead>
           <tbody>
-            {terms.map((t) => (
-              <tr key={t.termId}>
-                <td className="border border-slate-300 px-3 py-2">{t.termName}</td>
-                <td className="border border-slate-300 px-3 py-2 text-center tabular-nums">{t.maxMarks}</td>
-                <td className="border border-slate-300 px-3 py-2 text-center tabular-nums">{t.deducted}</td>
-                <td className="border border-slate-300 px-3 py-2 text-center tabular-nums">{t.remaining}</td>
-              </tr>
-            ))}
-            <tr className="bg-slate-50 font-semibold">
-              <td className="border border-slate-300 px-3 py-2">Total</td>
-              <td className="border border-slate-300 px-3 py-2 text-center tabular-nums">{year.maxMarks}</td>
-              <td className="border border-slate-300 px-3 py-2 text-center tabular-nums">{year.deducted}</td>
-              <td className="border border-slate-300 px-3 py-2 text-center tabular-nums">{year.remaining}</td>
+            {terms.map((t, idx) =>
+              t.notApplicable ? (
+                <tr key={t.termId} className={`${idx % 2 === 0 ? "bg-white" : "bg-slate-50"} text-black italic`}>
+                  <td className="border border-slate-300 px-2.5 py-1.5">{t.termName}</td>
+                  <td className="border border-slate-300 px-2.5 py-1.5 text-center" colSpan={4}>
+                    N/A — {t.notApplicableReason}
+                  </td>
+                </tr>
+              ) : (
+                <tr key={t.termId} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                  <td className="border border-slate-300 px-2.5 py-1.5 text-black font-medium">{t.termName}</td>
+                  <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums text-black">{t.maxMarks}</td>
+                  <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums text-black">{t.deducted}</td>
+                  <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums text-black">{t.remaining}</td>
+                  <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums text-black">{t.incidentsCount}</td>
+                </tr>
+              )
+            )}
+            <tr className="bg-slate-200 font-bold">
+              <td className="border border-slate-300 px-2.5 py-1.5 text-black">Total</td>
+              <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums text-black">{year.maxMarks}</td>
+              <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums text-black">{year.deducted}</td>
+              <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums text-black">{year.remaining}</td>
+              <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums text-black">{incidents?.length || 0}</td>
             </tr>
           </tbody>
         </table>
 
-        {/* Incidents summary */}
+        {/* Incidents summary — one compact card per term, listing every
+            finalized incident that fell in it (title, date, marks lost).
+            Text is kept solid black so it reads clearly on a printed/
+            scanned page, unlike the muted slate tones used elsewhere. */}
         <div className="mb-6">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm font-semibold">Incidents summary</p>
-            <div className="flex items-center gap-3 text-xs text-slate-600">
-              {terms.map((t) => (
-                <span key={t.termId}>
-                  {t.termName}: <span className="font-semibold text-slate-800">{t.incidentsCount}</span>
-                </span>
-              ))}
-              <span className="pl-2 border-l border-slate-300">
-                Year total: <span className="font-semibold text-slate-800">{incidents?.length || 0}</span>
-              </span>
-            </div>
+          <p className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-2">Incidents Summary — Per Term</p>
+          <div className="grid grid-cols-3 gap-3">
+            {terms.map((t, idx) => {
+              const accent = TERM_ACCENTS[idx % TERM_ACCENTS.length];
+              const allTermIncidents = (incidents || []).filter((i) => i.termId === t.termId);
+              const MAX_SHOWN = 6;
+              const termIncidents = allTermIncidents.slice(0, MAX_SHOWN);
+              const hiddenCount = allTermIncidents.length - termIncidents.length;
+              return (
+                <div key={t.termId} className="border border-slate-300 rounded-md overflow-hidden">
+                  <div className={`${accent.bar} h-1.5 w-full`} />
+                  <div className="p-2.5">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-[11px] font-bold uppercase tracking-wide text-black">{t.termName}</p>
+                      <span className={`text-[10px] font-semibold border rounded-full px-1.5 py-0.5 ${accent.chip}`}>
+                        {t.notApplicable ? "N/A" : `${allTermIncidents.length} incident${allTermIncidents.length === 1 ? "" : "s"}`}
+                      </span>
+                    </div>
+                    {t.notApplicable ? (
+                      <p className="text-[10px] italic text-slate-400">N/A — {t.notApplicableReason}</p>
+                    ) : termIncidents.length === 0 ? (
+                      <p className="text-[10px] italic text-black">No incidents recorded.</p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {termIncidents.map((inc) => (
+                          <li key={inc.id} className="text-[10px] leading-tight text-black">
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="font-semibold">{inc.title}</span>
+                              <span className="shrink-0 font-semibold">-{inc.marksDeducted}</span>
+                            </div>
+                            <span className="text-black/70">{formatDate(inc.date)}</span>
+                          </li>
+                        ))}
+                        {hiddenCount > 0 && (
+                          <li className="text-[10px] italic text-black/70">+{hiddenCount} more this term</li>
+                        )}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          {incidents && incidents.length > 0 ? (
-            <table className="w-full text-xs border-collapse">
-              <thead>
-                <tr className="bg-slate-100">
-                  <th className="border border-slate-300 px-2.5 py-1.5 text-left">Incident</th>
-                  <th className="border border-slate-300 px-2.5 py-1.5 text-left w-24">Term</th>
-                  <th className="border border-slate-300 px-2.5 py-1.5 text-left w-24">Date</th>
-                  <th className="border border-slate-300 px-2.5 py-1.5 text-center w-20">Marks</th>
-                </tr>
-              </thead>
-              <tbody>
-                {incidents.map((i) => (
-                  <tr key={i.id}>
-                    <td className="border border-slate-300 px-2.5 py-1.5">{i.title}</td>
-                    <td className="border border-slate-300 px-2.5 py-1.5">{i.termName}</td>
-                    <td className="border border-slate-300 px-2.5 py-1.5">{formatDate(i.date)}</td>
-                    <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums">
-                      -{i.marksDeducted}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <p className="text-xs text-slate-500">No finalized incidents this year.</p>
-          )}
         </div>
 
-        {/* Decision */}
+        {/* Decision — computed marks-based result, plus the discipline
+            office's recorded deliberation (if any) folded into the same
+            box instead of a separate one. Kept deliberately small and
+            colored (rather than large/black) so it reads as a verdict
+            stamp next to the plain-black incident detail above it. */}
         <div className="border-2 border-slate-800 rounded-md p-4 mb-8">
-          <div className="grid grid-cols-3 gap-4 text-sm mb-3">
-            <div>
-              <p className="text-slate-500">Total marks</p>
-              <p className="font-semibold tabular-nums">{year.maxMarks}</p>
-            </div>
-            <div>
-              <p className="text-slate-500">Marks deducted</p>
-              <p className="font-semibold tabular-nums">{year.deducted}</p>
-            </div>
-            <div>
-              <p className="text-slate-500">Remaining marks</p>
-              <p className="font-semibold tabular-nums">
-                {year.remaining} / {year.maxMarks} ({percent}%)
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center justify-between border-t border-slate-300 pt-3">
+          <div className="flex items-center justify-between">
             <p className="text-sm text-slate-600">
-              Decision: remaining marks {promoted ? "at or above" : "below"} 50% of the year total.
+              Remaining {year.remaining} / {year.maxMarks} ({percent}%)
+              {deliberation ? " — computed; see recorded deliberation below" : ""}
             </p>
-            <p className={`text-base font-bold uppercase tracking-wide ${promoted ? "text-emerald-700" : "text-red-700"}`}>
+            <p className={`text-xs font-bold uppercase tracking-wide ${promoted ? "text-emerald-700" : "text-red-700"}`}>
               {promoted ? "Promoted" : "Dismissed"}
             </p>
           </div>
+
+          {deliberation && (
+            <div className="flex items-center justify-between border-t border-slate-300 mt-3 pt-3">
+              <p className="text-xs uppercase tracking-wide text-slate-500">
+                Deliberation — {deliberation.termName || "this year"}
+                {deliberation.reason ? `: ${deliberation.reason}` : ""}
+              </p>
+              <p className={`text-xs uppercase tracking-wide ${DELIBERATION_META[deliberation.decision]?.className || "text-slate-700"} font-bold`}>
+                {DELIBERATION_META[deliberation.decision]?.label || deliberation.decision}
+              </p>
+            </div>
+          )}
+          {deliberation && (
+            <p className="text-xs mt-2 text-slate-500">
+              Decided by {deliberation.decidedBy || "—"}
+              {deliberation.decidedByRole ? ` (${deliberation.decidedByRole})` : ""} · {formatDate(deliberation.decidedAt)}
+              {deliberations && deliberations.length > 1 &&
+                ` · Other terms: ${deliberations
+                  .filter((d) => d.id !== deliberation.id)
+                  .map((d) => `${d.termName || "—"} — ${DELIBERATION_META[d.decision]?.label || d.decision}`)
+                  .join("; ")}`}
+            </p>
+          )}
         </div>
 
         {/* Footer */}
@@ -160,7 +217,7 @@ export default function YearlyConductReportPaper({ report }) {
           </div>
           <div className="text-right">
             <p className="font-semibold">{deanOfDiscipline?.name || "Dean of Discipline"}</p>
-            <p className="text-slate-500">{deanOfDiscipline?.email || "—"}</p>
+            <p className="text-slate-500">{deanOfDiscipline?.phone || "—"}</p>
           </div>
         </div>
       </div>

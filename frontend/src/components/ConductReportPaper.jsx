@@ -6,6 +6,27 @@ const STATUS_LABEL = {
   rejected: "Rejected",
 };
 
+const DELIBERATION_META = {
+  dismissed_permanently: {
+    label: "Dismissed Permanently",
+    className: "border-red-700 bg-red-50 text-red-700",
+    textClassName: "text-red-700",
+    emphasisClassName: "font-display font-extrabold tracking-wide",
+  },
+  dismissed_term: {
+    label: "Dismissed for the Term",
+    className: "border-amber-600 bg-amber-50 text-amber-700",
+    textClassName: "text-amber-600",
+    emphasisClassName: "font-display font-extrabold tracking-wide",
+  },
+  stained: {
+    label: "Stained Record (Retained)",
+    className: "border-slate-500 bg-slate-100 text-slate-700",
+    textClassName: "text-slate-700",
+    emphasisClassName: "",
+  },
+};
+
 function formatDate(value) {
   if (!value) return "—";
   return new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
@@ -23,9 +44,27 @@ function formatDate(value) {
  * else and lets this element take over the page.
  */
 export default function ConductReportPaper({ report }) {
-  const { school, class: klass, academicYear, term, student, score, status, incidents, deanOfDiscipline } = report;
-  const percent = Math.max(0, Math.round((score.remaining / score.maxMarks) * 100));
+  const {
+    school,
+    class: klass,
+    academicYear,
+    term,
+    student,
+    score,
+    status,
+    deliberation,
+    carriedOverDismissal,
+    systemDeliberationThisYear,
+    incidents,
+    deanOfDiscipline,
+  } = report;
+  const percent = score.notApplicable ? 0 : Math.max(0, Math.round((score.remaining / score.maxMarks) * 100));
   const good = status === "good";
+  // The system may have already made its year-level dismissal call
+  // against a different (later) term than the one this page is for —
+  // in which case a "Good"/"At Risk" termly status here would be stale
+  // and misleading. Same reasoning as the class report table.
+  const showTermlyStatus = !deliberation && !carriedOverDismissal && !systemDeliberationThisYear;
 
   return (
     <div
@@ -48,7 +87,7 @@ export default function ConductReportPaper({ report }) {
             </p>
             <p className="text-sm">
               <span className="font-semibold">Student:</span> {student.firstName} {student.lastName}
-              {student.admissionNumber ? ` (${student.admissionNumber})` : ""}
+              {student.admissionNumber && <span className="font-bold"> {student.admissionNumber}</span>}
             </p>
             {(student.guardianName || student.guardianPhone) && (
               <p className="text-sm">
@@ -67,6 +106,22 @@ export default function ConductReportPaper({ report }) {
         <h1 className="text-center text-lg font-bold uppercase tracking-wide mt-6 mb-6">
           Termly Conduct Report — {term.name}
         </h1>
+
+        {/* Carried-over permanent dismissal notice — this student was
+            already permanently dismissed in an earlier term, so this
+            term's blank record isn't "clean conduct", it's "not enrolled". */}
+        {carriedOverDismissal && (
+          <div className="border-2 border-red-700 bg-red-50 rounded-md p-4 mb-6">
+            <p className="font-display font-extrabold uppercase tracking-wide text-red-700 text-sm">
+              Not applicable — dismissed permanently
+            </p>
+            <p className="text-sm text-red-700 mt-1">
+              This student was permanently dismissed in {carriedOverDismissal.termName}
+              {carriedOverDismissal.decidedAt ? ` (${formatDate(carriedOverDismissal.decidedAt)})` : ""} and was not
+              enrolled during {term.name}. No conduct marks apply to this term.
+            </p>
+          </div>
+        )}
 
         {/* Incidents table */}
         <table className="w-full text-xs border-collapse mb-6">
@@ -132,26 +187,40 @@ export default function ConductReportPaper({ report }) {
           <div className="grid grid-cols-3 gap-4 text-sm mb-3">
             <div>
               <p className="text-slate-500">Total marks</p>
-              <p className="font-semibold tabular-nums">{score.maxMarks}</p>
+              <p className="font-semibold tabular-nums">{score.notApplicable ? "—" : score.maxMarks}</p>
             </div>
             <div>
               <p className="text-slate-500">Marks deducted</p>
-              <p className="font-semibold tabular-nums">{score.deducted}</p>
+              <p className="font-semibold tabular-nums">{score.notApplicable ? "—" : score.deducted}</p>
             </div>
             <div>
               <p className="text-slate-500">Remaining marks</p>
               <p className="font-semibold tabular-nums">
-                {score.remaining} / {score.maxMarks} ({percent}%)
+                {score.notApplicable ? "N/A" : `${score.remaining} / ${score.maxMarks} (${percent}%)`}
               </p>
             </div>
           </div>
           <div className="flex items-center justify-between border-t border-slate-300 pt-3">
             <p className="text-sm text-slate-600">
-              Status: remaining marks {good ? "at or above" : "below"} 50% of the term total.
+              {carriedOverDismissal
+                ? "Status: not enrolled this term (see notice above):"
+                : deliberation
+                  ? "Status:"
+                  : systemDeliberationThisYear
+                    ? "Status: system dismissal recorded elsewhere this academic year."
+                    : `Status: remaining marks ${good ? "at or above" : "below"} 50% of the term total.`}
             </p>
-            <p className={`text-xs font-bold uppercase tracking-wide ${good ? "text-emerald-700" : "text-amber-600"}`}>
-              {good ? "Good" : "At Risk"}
-            </p>
+            {(deliberation || carriedOverDismissal || showTermlyStatus) && (
+              <p className={`text-xs uppercase tracking-wide ${deliberation ? `${DELIBERATION_META[deliberation.decision]?.textClassName || "text-slate-700"} ${DELIBERATION_META[deliberation.decision]?.emphasisClassName || "font-bold"}` : carriedOverDismissal ? "font-display font-extrabold text-red-700" : `font-bold ${good ? "text-emerald-700" : "text-amber-600"}`}`}>
+                {deliberation
+                  ? DELIBERATION_META[deliberation.decision]?.label || deliberation.decision
+                  : carriedOverDismissal
+                    ? "Dismissed Permanently"
+                    : good
+                      ? "Good"
+                      : "At Risk"}
+              </p>
+            )}
           </div>
           <p className="text-xs text-slate-400 mt-2">
             This is a termly status only — the promotion/dismissal decision is made at year end, combining all three terms.
@@ -165,7 +234,7 @@ export default function ConductReportPaper({ report }) {
           </div>
           <div className="text-right">
             <p className="font-semibold">{deanOfDiscipline?.name || "Dean of Discipline"}</p>
-            <p className="text-slate-500">{deanOfDiscipline?.email || "—"}</p>
+            <p className="text-slate-500">{deanOfDiscipline?.phone || "—"}</p>
           </div>
         </div>
       </div>

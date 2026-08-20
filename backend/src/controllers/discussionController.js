@@ -1,5 +1,6 @@
-const { Discussion, DiscussionMessage, MisconductRecord, Student, MisconductType, User, AcademicYear } = require("../models");
+const { Discussion, DiscussionMessage, MisconductRecord, Student, MisconductType, Class, User, AcademicYear } = require("../models");
 const ApiError = require("../utils/ApiError");
+const { logActivity } = require("../services/activityLogService");
 
 const CAN_MANAGE = ["dean_of_discipline", "manager"]; // Dean of Discipline and the school Manager can start, close, and reopen a thread
 const AUTHOR_INCLUDE = { model: User, as: "author", attributes: ["id", "name", "role", "disciplineRole"] };
@@ -100,6 +101,23 @@ async function open(req, res, next) {
     }
 
     const full = await Discussion.findByPk(discussion.id, { include: DISCUSSION_INCLUDE });
+    const klass = await Class.findByPk(record.classId);
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: record.reportedByUserId,
+      category: "discussions",
+      action: "discussion_opened",
+      description: `${req.user.name} opened a discussion on ${full.MisconductRecord?.Student ? `${full.MisconductRecord.Student.firstName} ${full.MisconductRecord.Student.lastName}'s` : "a"} record`,
+      entityType: "Discussion",
+      entityId: discussion.id,
+      studentId: record.studentId,
+      metadata: { className: klass?.name },
+    });
+
     res.status(201).json(full);
   } catch (err) {
     next(err);
@@ -124,6 +142,23 @@ async function close(req, res, next) {
     });
 
     const full = await Discussion.findByPk(discussion.id, { include: DISCUSSION_INCLUDE });
+    const klass = full.MisconductRecord ? await Class.findByPk(full.MisconductRecord.classId) : null;
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: full.MisconductRecord?.reportedByUserId,
+      category: "discussions",
+      action: "discussion_closed",
+      description: `${req.user.name} closed the discussion on ${full.MisconductRecord?.Student ? `${full.MisconductRecord.Student.firstName} ${full.MisconductRecord.Student.lastName}'s` : "a"} record`,
+      entityType: "Discussion",
+      entityId: discussion.id,
+      studentId: full.MisconductRecord?.studentId,
+      metadata: { className: klass?.name },
+    });
+
     res.json(full);
   } catch (err) {
     next(err);
@@ -149,6 +184,23 @@ async function reopen(req, res, next) {
     });
 
     const full = await Discussion.findByPk(discussion.id, { include: DISCUSSION_INCLUDE });
+    const klass = full.MisconductRecord ? await Class.findByPk(full.MisconductRecord.classId) : null;
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: full.MisconductRecord?.reportedByUserId,
+      category: "discussions",
+      action: "discussion_reopened",
+      description: `${req.user.name} reopened the discussion on ${full.MisconductRecord?.Student ? `${full.MisconductRecord.Student.firstName} ${full.MisconductRecord.Student.lastName}'s` : "a"} record`,
+      entityType: "Discussion",
+      entityId: discussion.id,
+      studentId: full.MisconductRecord?.studentId,
+      metadata: { className: klass?.name },
+    });
+
     res.json(full);
   } catch (err) {
     next(err);
@@ -176,6 +228,23 @@ async function addMessage(req, res, next) {
     });
 
     const full = await DiscussionMessage.findByPk(created.id, { include: [AUTHOR_INCLUDE] });
+    const klass = await Class.findByPk(discussion.MisconductRecord.classId);
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: discussion.MisconductRecord.reportedByUserId,
+      category: "discussions",
+      action: "discussion_message_posted",
+      description: `${req.user.name} posted a message in a discussion`,
+      entityType: "Discussion",
+      entityId: discussion.id,
+      studentId: discussion.MisconductRecord.studentId,
+      metadata: { className: klass?.name },
+    });
+
     res.status(201).json(full);
   } catch (err) {
     next(err);

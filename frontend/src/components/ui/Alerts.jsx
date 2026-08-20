@@ -66,10 +66,12 @@ export function AllTermsLockedNotice() {
  */
 export function NotCurrentYearNotice({ yearName, action = "reports and records can only be created" }) {
   return (
-    <p className="flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-700">
-      <CalendarClock size={15} className="shrink-0" />
-      {yearName ? `${yearName} isn't` : "This isn't"} the current academic year — {action} for the current year.
-      Switch back to the current year to continue.
+    <p className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-sm leading-relaxed text-amber-700">
+      <CalendarClock size={15} className="shrink-0 mt-0.5" />
+      <span>
+        {yearName ? `${yearName} isn't` : "This isn't"} the current academic year — {action} for the current year.
+        Switch back to the current year to continue.
+      </span>
     </p>
   );
 }

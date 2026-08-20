@@ -250,6 +250,33 @@ async function getExceededStudentIds(schoolId, termId) {
   return rows.map((r) => ({ studentId: r.studentId, deducted: Number(r.deducted) }));
 }
 
+/**
+ * The yearly counterpart to getExceededStudentIds — every student in a
+ * school whose *cumulative* deductions across the whole academic year
+ * have crossed the same "recommended dismissal" line getYearScore uses
+ * (remaining < half the year's total marks), even if they never used up
+ * a single term's 40 on its own. Without this, a student who loses a
+ * little each term (say 15/40, 15/40, 15/40 — never hitting a term's
+ * cap) crosses the yearly threshold but was previously invisible to the
+ * whole deliberation pipeline: never on the awaiting-deliberation queue,
+ * never decided, never in the notification feed. This is what powers
+ * the "computed dismissed" signal on the Yearly Report — surfaced here
+ * so the discipline office can actually act on it through the same
+ * decide()/Deliberation flow as a termly exceed, instead of it only
+ * ever being a passive line on a report.
+ */
+async function getYearExceededStudentIds(schoolId, academicYearId, termsCount) {
+  const maxMarks = MARKS_PER_TERM * (termsCount || TERMS_PER_YEAR);
+  const rows = await MisconductRecord.findAll({
+    where: { schoolId, academicYearId, status: "finalized" },
+    attributes: ["studentId", [sequelize.fn("SUM", sequelize.col("marks_deducted")), "deducted"]],
+    group: ["studentId"],
+    having: sequelize.where(sequelize.fn("SUM", sequelize.col("marks_deducted")), { [Op.gte]: maxMarks / 2 }),
+    raw: true,
+  });
+  return rows.map((r) => ({ studentId: r.studentId, deducted: Number(r.deducted) }));
+}
+
 module.exports = {
   MARKS_PER_TERM,
   MARKS_PER_YEAR,
@@ -261,5 +288,6 @@ module.exports = {
   capDeductionToRemaining,
   isTermExceeded,
   getExceededStudentIds,
+  getYearExceededStudentIds,
   countPending,
 };

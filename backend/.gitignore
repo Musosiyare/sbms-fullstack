@@ -1,7 +1,2 @@
 node_modules/
 .env
-
-# Uploaded evidence files (photos, PDFs, scans, Word docs) — user content,
-# never committed. The sbms_misconduct_evidence table tracks the metadata;
-# this is just where the actual files land on disk.
-uploads/

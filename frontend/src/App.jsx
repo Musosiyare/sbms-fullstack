@@ -19,6 +19,7 @@ import DismissedStudents from "./pages/DismissedStudents";
 import MisconductTypes from "./pages/MisconductTypes";
 import StaffRoles from "./pages/StaffRoles";
 import Discussions from "./pages/Discussions";
+import ActivityLog from "./pages/ActivityLog";
 
 export default function App() {
   return (
@@ -111,6 +112,14 @@ export default function App() {
                 element={
                   <ProtectedRoute>
                     <Discussions />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/activity-log"
+                element={
+                  <ProtectedRoute>
+                    <ActivityLog />
                   </ProtectedRoute>
                 }
               />

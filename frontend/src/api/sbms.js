@@ -72,8 +72,25 @@ export const getDismissedStudentsReport = (params) =>
   api.get("/reports/dismissed-students", { params }).then((r) => r.data);
 
 export const getExceededStudents = (params) => api.get("/deliberations/exceeded", { params }).then((r) => r.data);
+export const getStudentDeliberations = (studentId) =>
+  api.get(`/deliberations/student/${studentId}`).then((r) => r.data);
 export const submitDeliberation = (payload) => api.post("/deliberations", payload).then((r) => r.data);
 export const undoDeliberation = (id) => api.delete(`/deliberations/${id}`).then((r) => r.data);
+
+export const getActivityLogs = (params) => api.get("/activity-logs", { params }).then((r) => r.data);
+
+export const getNotificationSeen = (feed) =>
+  api.get("/notifications/seen", { params: { feed } }).then((r) => r.data);
+export const markNotificationSeen = (feed) => api.post("/notifications/seen", { feed }).then((r) => r.data);
+
+export const getReadNotifications = (feed) =>
+  api.get("/notifications/read", { params: { feed } }).then((r) => r.data);
+export const markNotificationRead = (feed, itemId) =>
+  api.post("/notifications/read", { feed, itemId }).then((r) => r.data);
+export const markNotificationUnread = (feed, itemId) =>
+  api.post("/notifications/unread", { feed, itemId }).then((r) => r.data);
+export const markAllNotificationsRead = (feed, itemIds) =>
+  api.post("/notifications/read-all", { feed, itemIds }).then((r) => r.data);
 
 export const openDiscussion = (payload) => api.post("/discussions", payload).then((r) => r.data);
 export const closeDiscussion = (id, note) => api.patch(`/discussions/${id}/close`, { note }).then((r) => r.data);

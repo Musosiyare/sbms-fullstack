@@ -53,6 +53,8 @@ export default function ClassConductReportModal({ classId, termId, academicYearI
         student: s.student,
         score: s.score,
         status: s.status,
+        deliberation: s.deliberation,
+        carriedOverDismissal: s.carriedOverDismissal,
         incidents: s.incidents,
       }));
       exportConductReportPdf(reports, `${fileBase}-conduct-report.pdf`);
@@ -139,6 +141,8 @@ export default function ClassConductReportModal({ classId, termId, academicYearI
                     student: s.student,
                     score: s.score,
                     status: s.status,
+                    deliberation: s.deliberation,
+                    carriedOverDismissal: s.carriedOverDismissal,
                     incidents: s.incidents,
                   }}
                 />

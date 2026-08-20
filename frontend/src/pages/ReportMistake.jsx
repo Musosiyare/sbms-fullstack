@@ -8,6 +8,7 @@ import { Field, Select, Textarea } from "../components/ui/FormField";
 import { ErrorText, TermLockBadge, AllTermsLockedNotice, NotCurrentYearNotice } from "../components/ui/Alerts";
 import EvidenceUpload, { EvidenceFieldLabel } from "../components/ui/EvidenceUpload";
 import SearchableSelect from "../components/ui/SearchableSelect";
+import { YearSelect } from "../components/ui/PillSelect";
 import { buildMisconductOptions } from "../utils/misconductOptions";
 import { useConfirm } from "../components/ui/ConfirmProvider";
 import { useScopePicker } from "../hooks/useScopePicker";
@@ -254,12 +255,14 @@ export default function ReportMistake() {
   // form at all is a weekend/send-home incident, which they're not
   // allowed to finalize themselves. So the catalog here narrows down to
   // exactly that subset for them; nothing else would make sense to pick.
-  const visibleTypes = types ? (isOfficer ? types.filter((t) => t.requiresSendHome) : types) : types;
+  const visibleTypes = types
+    ? (isOfficer ? types.filter((t) => t.isActive && t.requiresSendHome) : types.filter((t) => t.isActive))
+    : types;
   // Whole-class reports can never include a send-home incident — sending
   // an entire class home for the weekend has to be a per-student call by
   // the discipline office, not something a bulk report should even offer
   // (mirrors the backend's bulkClassReport restriction).
-  const classVisibleTypes = types ? types.filter((t) => !t.requiresSendHome) : types;
+  const classVisibleTypes = types ? types.filter((t) => t.isActive && !t.requiresSendHome) : types;
   const classTargetCount = Math.max(pickableStudents.length - excludedIds.size, 0);
 
   return (
@@ -288,21 +291,20 @@ export default function ReportMistake() {
       )}
 
       {mode === "class" && canReportClass ? (
-        <form onSubmit={handleClassSubmit} className="flex flex-col gap-4 max-w-lg">
+        <form onSubmit={handleClassSubmit} className="flex flex-col gap-5 max-w-3xl">
           <p className="text-xs text-brand-600 -mt-1">
             Submits a pending report on every active student in the class at once, for the discipline office to
             review — nothing is finalized and no marks move yet. Uncheck any students below to leave them out.
           </p>
-          <div className="grid sm:grid-cols-2 gap-4">
+          <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Academic year">
-              <Select value={scope.academicYearId} onChange={(e) => scope.setAcademicYearId(e.target.value)}>
-                <option value="">Select...</option>
-                {scope.academicYears.map((y) => (
-                  <option key={y.id} value={y.id}>
-                    {y.name}
-                  </option>
-                ))}
-              </Select>
+              <YearSelect
+                fullWidth
+                options={scope.academicYears.map((y) => ({ id: y.id, label: y.name, isCurrent: y.isCurrent }))}
+                value={scope.academicYearId}
+                onChange={scope.setAcademicYearId}
+                emptyLabel="Select..."
+              />
             </Field>
             <Field label="Term">
               <Select
@@ -324,9 +326,11 @@ export default function ReportMistake() {
 
           {scope.terms.length > 0 && scope.terms.every((t) => t.isLocked) && <AllTermsLockedNotice />}
           {!scope.isCurrentAcademicYear && (
-            <NotCurrentYearNotice
-              yearName={scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId))?.name}
-            />
+            <div className="mb-4">
+              <NotCurrentYearNotice
+                yearName={scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId))?.name}
+              />
+            </div>
           )}
 
           <Field label="Class">
@@ -344,32 +348,34 @@ export default function ReportMistake() {
             </Select>
           </Field>
 
-          <Field label="Incident">
-            <SearchableSelect
-              options={buildMisconductOptions(classVisibleTypes)}
-              value={classMisconductTypeId}
-              onChange={setClassMisconductTypeId}
-              disabled={!types || !scope.isCurrentAcademicYear}
-              placeholder={types ? "Search incident types..." : "Loading..."}
-            />
-            <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-600">
-              <Info size={14} className="shrink-0 mt-0.5" />
-              <span>
-                Only incident types that don't send a student home are shown here — those need to be reported per
-                student instead, from "One student" above.
-              </span>
-            </p>
-          </Field>
+          <div className="grid gap-4 sm:grid-cols-2 items-start">
+            <Field label="Incident">
+              <SearchableSelect
+                options={buildMisconductOptions(classVisibleTypes)}
+                value={classMisconductTypeId}
+                onChange={setClassMisconductTypeId}
+                disabled={!types || !scope.isCurrentAcademicYear}
+                placeholder={types ? "Search incident types..." : "Loading..."}
+              />
+              <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-600">
+                <Info size={14} className="shrink-0 mt-0.5" />
+                <span>
+                  Only incident types that don't send a student home are shown here — those need to be reported per
+                  student instead, from "One student" above.
+                </span>
+              </p>
+            </Field>
 
-          <Field label="Additional notes (optional)">
-            <Textarea
-              rows={3}
-              value={classDescription}
-              onChange={(e) => setClassDescription(e.target.value)}
-              placeholder="Anything else worth adding..."
-              disabled={!scope.isCurrentAcademicYear}
-            />
-          </Field>
+            <Field label="Additional notes (optional)">
+              <Textarea
+                rows={3}
+                value={classDescription}
+                onChange={(e) => setClassDescription(e.target.value)}
+                placeholder="Anything else worth adding..."
+                disabled={!scope.isCurrentAcademicYear}
+              />
+            </Field>
+          </div>
 
           {scope.classId && (
             <Field label={`Students (${classTargetCount} of ${pickableStudents.length} will be reported)`}>
@@ -444,17 +450,16 @@ export default function ReportMistake() {
         </p>
       )}
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4 max-w-lg">
-        <div className="grid sm:grid-cols-2 gap-4">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-5 max-w-3xl">
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Academic year">
-            <Select value={scope.academicYearId} onChange={(e) => scope.setAcademicYearId(e.target.value)}>
-              <option value="">Select...</option>
-              {scope.academicYears.map((y) => (
-                <option key={y.id} value={y.id}>
-                  {y.name}
-                </option>
-              ))}
-            </Select>
+            <YearSelect
+              fullWidth
+              options={scope.academicYears.map((y) => ({ id: y.id, label: y.name, isCurrent: y.isCurrent }))}
+              value={scope.academicYearId}
+              onChange={scope.setAcademicYearId}
+              emptyLabel="Select..."
+            />
           </Field>
           <Field label="Term">
             <Select
@@ -472,16 +477,6 @@ export default function ReportMistake() {
             </Select>
             <TermLockBadge term={scope.terms.find((t) => String(t.id) === String(scope.termId))} />
           </Field>
-        </div>
-
-        {scope.terms.length > 0 && scope.terms.every((t) => t.isLocked) && <AllTermsLockedNotice />}
-        {!scope.isCurrentAcademicYear && (
-          <NotCurrentYearNotice
-            yearName={scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId))?.name}
-          />
-        )}
-
-        <div className="grid sm:grid-cols-2 gap-4">
           <Field label="Class">
             <Select
               value={scope.classId}
@@ -512,6 +507,15 @@ export default function ReportMistake() {
           </Field>
         </div>
 
+        {scope.terms.length > 0 && scope.terms.every((t) => t.isLocked) && <AllTermsLockedNotice />}
+        {!scope.isCurrentAcademicYear && (
+          <div className="mb-4">
+            <NotCurrentYearNotice
+              yearName={scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId))?.name}
+            />
+          </div>
+        )}
+
         {checkingStudent && <p className="text-xs text-slate-400">Checking this student's status...</p>}
 
         {studentWarning ? (
@@ -527,6 +531,7 @@ export default function ReportMistake() {
           </div>
         ) : (
           <>
+        <div className="grid gap-4 sm:grid-cols-2 items-start">
         <Field label="Incident">
           <SearchableSelect
             options={buildMisconductOptions(visibleTypes)}
@@ -566,6 +571,7 @@ export default function ReportMistake() {
             disabled={!scope.isCurrentAcademicYear}
           />
         </Field>
+        </div>
 
         <Field label={<EvidenceFieldLabel />}>
           <EvidenceUpload

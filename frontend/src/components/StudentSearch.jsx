@@ -2,6 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import { Search, X, ChevronRight, Loader2, Lock } from "lucide-react";
 import { searchStudents } from "../api/sbms";
 
+const DELIBERATION_BADGE = {
+  dismissed_permanently: {
+    label: "Dismissed",
+    className: "bg-red-100 text-red-800 ring-1 ring-red-300",
+    emphasisClassName: "font-display font-extrabold tracking-wide",
+  },
+  dismissed_term: {
+    label: "Dismissed (Term)",
+    className: "bg-amber-100 text-amber-800 ring-1 ring-amber-300",
+    emphasisClassName: "font-display font-extrabold tracking-wide",
+  },
+  stained: { label: "Stained", className: "bg-slate-200 text-slate-700", emphasisClassName: "" },
+};
+
 /**
  * Live "quick jump" search box for the header. Debounces keystrokes,
  * queries GET /reference/students/search, and shows each match's class
@@ -100,7 +114,7 @@ export default function StudentSearch({ onSelect }) {
   const showDropdown = open && query.trim().length >= 2;
 
   return (
-    <div ref={rootRef} className="relative w-full sm:w-72">
+    <div ref={rootRef} className="relative w-full">
       <div
         className={`relative flex items-center rounded-xl border bg-slate-50 shadow-sm transition-all ${
           open ? "border-brand-400 bg-white" : "border-slate-200 hover:border-slate-300"
@@ -140,7 +154,7 @@ export default function StudentSearch({ onSelect }) {
       </div>
 
       {showDropdown && (
-        <div className="absolute left-0 top-[calc(100%+8px)] z-40 w-full sm:w-[22rem] max-w-[90vw] max-h-80 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
+        <div className="absolute left-0 top-[calc(100%+8px)] z-40 w-full max-h-80 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
           {loading && results.length === 0 && (
             <div className="flex items-center gap-2 px-3.5 py-3 text-xs text-slate-400">
               <Loader2 size={14} className="animate-spin" /> Searching…
@@ -176,14 +190,24 @@ export default function StudentSearch({ onSelect }) {
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
-                {s.conduct && (
+                {s.conduct?.deliberation ? (
                   <span
-                    className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                      s.conduct.atRisk ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"
-                    }`}
+                    className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] ${
+                      DELIBERATION_BADGE[s.conduct.deliberation.decision]?.className || "bg-slate-200 text-slate-700"
+                    } ${DELIBERATION_BADGE[s.conduct.deliberation.decision]?.emphasisClassName || "font-semibold"}`}
                   >
-                    {s.conduct.remaining}/{s.conduct.maxMarks}
+                    {DELIBERATION_BADGE[s.conduct.deliberation.decision]?.label || s.conduct.deliberation.decision}
                   </span>
+                ) : (
+                  s.conduct && (
+                    <span
+                      className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        s.conduct.atRisk ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"
+                      }`}
+                    >
+                      {s.conduct.remaining}/{s.conduct.maxMarks}
+                    </span>
+                  )
                 )}
                 <ChevronRight size={14} className="text-slate-300" />
               </div>

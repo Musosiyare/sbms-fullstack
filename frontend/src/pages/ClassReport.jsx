@@ -3,13 +3,32 @@ import { useNavigate } from "react-router-dom";
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
 import { FileText, Download, AlertTriangle } from "lucide-react";
-import PillSelect, { ScopeBar, ScopeGroup } from "../components/ui/PillSelect";
+import PillSelect, { ScopeBar, ScopeGroup, YearSelect } from "../components/ui/PillSelect";
 import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
 import { useScopePicker } from "../hooks/useScopePicker";
 import { useAuth } from "../context/AuthContext";
 import { getClassScores } from "../api/sbms";
 import ConductReportModal from "../components/ConductReportModal";
 import ClassConductReportModal from "../components/ClassConductReportModal";
+
+// Deliberation decision — plain colored text, no pill/background. One
+// line only (term name inline, same color, slightly muted) so it never
+// wraps or competes visually with the rest of the row.
+const DELIBERATION_BADGE = {
+  dismissed_permanently: { label: "Dismissed", className: "text-red-700" },
+  dismissed_term: { label: "Dismissed (Term)", className: "text-amber-700" },
+  stained: { label: "Stained", className: "text-slate-600" },
+};
+
+// Dismissed students get one quiet signal: a thin colored line down the
+// left edge of the row. Everything else in the row — name, admission no.,
+// marks — stays the same color and weight as any other row; only the
+// Decision cell itself carries color, so there's exactly one place the
+// eye needs to check, not five.
+const DISMISSED_ROW = {
+  dismissed_permanently: { cell: "border-l-2 border-l-red-400" },
+  dismissed_term: { cell: "border-l-2 border-l-amber-400" },
+};
 
 const CAN_APPROVE = ["dean_of_discipline", "disciplinary_officer"];
 
@@ -58,8 +77,8 @@ export default function ClassReport() {
     >
       <ScopeBar>
         <ScopeGroup label="Academic year">
-          <PillSelect
-            options={scope.academicYears.map((y) => ({ id: y.id, label: y.name }))}
+          <YearSelect
+            options={scope.academicYears.map((y) => ({ id: y.id, label: y.name, isCurrent: y.isCurrent }))}
             value={scope.academicYearId}
             onChange={scope.setAcademicYearId}
             emptyLabel="No academic years yet"
@@ -74,8 +93,8 @@ export default function ClassReport() {
           />
         </ScopeGroup>
         <ScopeGroup label="Class">
-          <PillSelect
-            options={scope.classes.map((c) => ({ id: c.id, label: c.name }))}
+          <YearSelect
+            options={scope.classes.map((c) => ({ id: c.id, label: c.name, isCurrent: true }))}
             value={scope.classId}
             onChange={scope.setClassId}
             emptyLabel="Pick a year first"
@@ -100,9 +119,18 @@ export default function ClassReport() {
           ) : scores.length === 0 ? (
             <EmptyRow colSpan={4}>No students in this class.</EmptyRow>
           ) : (
-            scores.map((s) => (
+            scores.map((s) => {
+              // A student permanently dismissed in an earlier term this
+              // year shouldn't read as a fresh, clean student just because
+              // this later term has no records against them — they're not
+              // enrolled. carriedOverDismissal (set by the backend when
+              // that's the case) takes priority over this term's own
+              // deliberation, which won't exist anyway.
+              const toneKey = s.carriedOverDismissal ? "dismissed_permanently" : s.deliberation?.decision;
+              const tone = DISMISSED_ROW[toneKey];
+              return (
               <tr key={s.studentId}>
-                <Td>
+                <Td className={tone?.cell}>
                   <span className="font-bold text-slate-800">{s.admissionNumber || "—"}</span>
                 </Td>
                 <Td className="font-medium text-slate-800">
@@ -119,14 +147,43 @@ export default function ClassReport() {
                 </Td>
                 <Td className="text-center">
                   <div className="flex items-center justify-center gap-2">
-                    <span className="font-bold tabular-nums text-slate-800">{s.term.remaining}</span>
-                    <span
-                      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
-                        s.term.atRisk ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"
-                      }`}
-                    >
-                      {s.term.atRisk ? "At Risk" : "Good"}
-                    </span>
+                    {s.carriedOverDismissal ? (
+                      <span className="text-xs text-slate-400">N/A</span>
+                    ) : (
+                      <span className="font-bold tabular-nums text-slate-800">{s.term.remaining}</span>
+                    )}
+                    {s.carriedOverDismissal ? (
+                      <span
+                        className={`whitespace-nowrap text-xs font-medium ${DELIBERATION_BADGE.dismissed_permanently.className}`}
+                        title={`Dismissed permanently in ${s.carriedOverDismissal.termName} — not enrolled this term`}
+                      >
+                        Dismissed · {s.carriedOverDismissal.termName}
+                      </span>
+                    ) : s.deliberation ? (
+                      <span
+                        className={`whitespace-nowrap text-xs font-medium ${
+                          DELIBERATION_BADGE[s.deliberation.decision]?.className || "text-slate-600"
+                        }`}
+                      >
+                        {DELIBERATION_BADGE[s.deliberation.decision]?.label || s.deliberation.decision}
+                      </span>
+                    ) : s.systemDeliberationThisYear ? (
+                      // The system has already made its year-level call
+                      // for this student, recorded against a different
+                      // (later) term than the one being viewed here — so
+                      // a per-term "At Risk"/"Good" judgment would be
+                      // stale and misleading. Just the plain marks
+                      // number, no badge, same as the branches above.
+                      null
+                    ) : (
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                          s.term.atRisk ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"
+                        }`}
+                      >
+                        {s.term.atRisk ? "At Risk" : "Good"}
+                      </span>
+                    )}
                   </div>
                 </Td>
                 <Td className="text-right">
@@ -148,7 +205,8 @@ export default function ClassReport() {
                   </div>
                 </Td>
               </tr>
-            ))
+              );
+            })
           )}
         </tbody>
       </Table>

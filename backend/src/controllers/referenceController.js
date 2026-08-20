@@ -212,7 +212,27 @@ async function searchStudents(req, res, next) {
         let conduct = null;
         if (klass && currentYear) {
           const year = await conductScoreService.getYearScore(s.id, currentYear.id);
-          conduct = { remaining: year.remaining, maxMarks: year.maxMarks, atRisk: year.remaining < year.maxMarks / 2 };
+          const yearDeliberations = await Deliberation.findAll({
+            where: { studentId: s.id, academicYearId: currentYear.id },
+          });
+          const SEVERITY = { dismissed_permanently: 3, dismissed_term: 2, stained: 1 };
+          // A human decision (any severity) governs over a system one —
+          // see applySystemYearlyDismissals in deliberationController for
+          // why the system never creates a competing row once a human has
+          // already decided the student, but older data or a same-term
+          // coincidence could still have both, so this stays defensive.
+          const humanDeliberations = yearDeliberations.filter((d) => d.decidedByRole !== "system");
+          const pool = humanDeliberations.length > 0 ? humanDeliberations : yearDeliberations;
+          const worst = pool.reduce(
+            (best, d) => (!best || SEVERITY[d.decision] > SEVERITY[best.decision] ? d : best),
+            null
+          );
+          conduct = {
+            remaining: year.remaining,
+            maxMarks: year.maxMarks,
+            atRisk: year.remaining < year.maxMarks / 2,
+            deliberation: worst ? { decision: worst.decision, decidedAt: worst.decidedAt } : null,
+          };
         }
         return {
           id: s.id,

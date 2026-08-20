@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import Card from "../components/ui/Card";
 import Badge from "../components/ui/Badge";
-import PillSelect from "../components/ui/PillSelect";
+import { YearSelect } from "../components/ui/PillSelect";
 import DiscussionModal from "../components/DiscussionModal";
 import { listDiscussions, getAcademicYears } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
@@ -27,7 +27,7 @@ function DiscussionRow({ d, onOpen }) {
   return (
     <button
       onClick={() => onOpen(d)}
-      className="flex w-full items-center justify-between gap-4 rounded-xl border border-slate-100 bg-white px-4 py-3.5 text-left transition-colors hover:border-brand-200 hover:bg-brand-50/40"
+      className="flex w-full items-center justify-between gap-4 rounded-xl border border-slate-100 bg-white px-4 py-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-brand-200 hover:bg-brand-50/40 hover:shadow-sm"
     >
       <div className="flex items-center gap-3 min-w-0">
         <div
@@ -116,8 +116,8 @@ export default function Discussions() {
           {academicYears.length > 0 && (
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-slate-400 shrink-0">Year</span>
-              <PillSelect
-                options={academicYears.map((y) => ({ id: y.id, label: y.name }))}
+              <YearSelect
+                options={academicYears.map((y) => ({ id: y.id, label: y.name, isCurrent: y.isCurrent }))}
                 value={academicYearId}
                 onChange={setAcademicYearId}
               />

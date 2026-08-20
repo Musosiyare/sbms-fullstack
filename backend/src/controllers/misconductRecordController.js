@@ -19,6 +19,13 @@ const {
 const ApiError = require("../utils/ApiError");
 const { EVIDENCE_DIR } = require("../middleware/upload");
 const conductScoreService = require("../services/conductScoreService");
+const { notifyGuardianOfDeduction } = require("../services/guardianNotificationService");
+const { logActivity } = require("../services/activityLogService");
+
+/** Short human label for whichever incident a record/report used — catalog type, or the free-text fallback. */
+function incidentLabel(type, customTitle) {
+  return type?.title || customTitle || "a misconduct incident";
+}
 
 const CAN_FINALIZE = ["dean_of_discipline", "disciplinary_officer"];
 
@@ -208,8 +215,9 @@ async function createReport(req, res, next) {
     if (!misconductTypeId && !customTitle && !description) {
       return next(ApiError.badRequest("Pick an incident from the list", "misconductTypeId"));
     }
+    let type = null;
     if (misconductTypeId) {
-      const type = await MisconductType.findByPk(misconductTypeId);
+      type = await MisconductType.findByPk(misconductTypeId);
       if (!type) return next(ApiError.notFound("Misconduct type not found"));
       // A Disciplinary Officer can already record every other incident type
       // directly (see createRecord) — the report pathway exists for them
@@ -258,6 +266,22 @@ async function createReport(req, res, next) {
 
     await saveEvidenceFiles(req.files, record, req.user.id);
     await record.reload({ include: [EVIDENCE_INCLUDE] });
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: req.user.id,
+      category: "reports",
+      action: "report_created",
+      description: `${req.user.name} reported ${student.firstName} ${student.lastName} for ${incidentLabel(type, customTitle)}`,
+      entityType: "MisconductRecord",
+      entityId: record.id,
+      studentId: student.id,
+      metadata: { className: klass.name },
+    });
+
     res.status(201).json(record);
   } catch (err) {
     next(err);
@@ -377,6 +401,11 @@ async function createRecord(req, res, next) {
     await saveEvidenceFiles(req.files, record, req.user.id);
     await record.reload({ include: [EVIDENCE_INCLUDE] });
 
+    // Fire-and-forget: never let a guardian SMS block or fail the response
+    // for the actual disciplinary action. Errors are logged to SmsLog
+    // inside the service itself, not surfaced here.
+    notifyGuardianOfDeduction(record, student, { typeTitle: type?.title }).catch(() => {});
+
     // Tell whoever just recorded this immediately if it used up (or had
     // already used up) the student's conduct marks for the term, so it
     // doesn't quietly go unnoticed until someone later opens the conduct
@@ -387,6 +416,22 @@ async function createRecord(req, res, next) {
       payload.marksExceeded = true;
       payload.marksExceededMessage = `${student.firstName} ${student.lastName} has used up all conduct marks allowed for this term — refer this student for deliberation.`;
     }
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: req.user.id,
+      category: "reports",
+      action: "record_created",
+      description: `${req.user.name} recorded ${student.firstName} ${student.lastName} for ${incidentLabel(type, customTitle)}`,
+      entityType: "MisconductRecord",
+      entityId: record.id,
+      studentId: student.id,
+      metadata: { className: klass.name, marksDeducted: appliedDeduction },
+    });
+
     res.status(201).json(payload);
   } catch (err) {
     next(err);
@@ -534,6 +579,7 @@ async function bulkClassRecord(req, res, next) {
         if (await conductScoreService.isTermExceeded(student.id, termId)) {
           exceededStudents.push({ id: student.id, firstName: student.firstName, lastName: student.lastName });
         }
+        notifyGuardianOfDeduction(record, student, { typeTitle: type?.title }).catch(() => {});
         return record;
       })
     );
@@ -548,6 +594,25 @@ async function bulkClassRecord(req, res, next) {
       skippedDismissed: skippedDismissed.map((s) => ({ id: s.id, firstName: s.firstName, lastName: s.lastName })),
       exceededStudents,
       records,
+    });
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: req.user.id,
+      category: "reports",
+      action: "class_record_created",
+      description: `${req.user.name} deducted marks from ${records.length} student${records.length === 1 ? "" : "s"} for ${incidentLabel(type, customTitle)}`,
+      entityType: "Class",
+      entityId: klass.id,
+      metadata: {
+        recordIds: records.map((r) => r.id),
+        studentIds: targets.map((s) => s.id),
+        className: klass.name,
+        marksDeducted: deduction,
+      },
     });
   } catch (err) {
     next(err);
@@ -681,6 +746,20 @@ async function bulkClassReport(req, res, next) {
       skippedDismissed: skippedDismissed.map((s) => ({ id: s.id, firstName: s.firstName, lastName: s.lastName })),
       records,
     });
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: req.user.id,
+      category: "reports",
+      action: "class_report_created",
+      description: `${req.user.name} submitted ${records.length} pending report${records.length === 1 ? "" : "s"} — ${incidentLabel(type, customTitle)}`,
+      entityType: "Class",
+      entityId: klass.id,
+      metadata: { recordIds: records.map((r) => r.id), studentIds: targets.map((s) => s.id), className: klass.name },
+    });
   } catch (err) {
     next(err);
   }
@@ -747,6 +826,31 @@ async function approveOneRecord(record, req, { sentHomeFrom, sentHomeTo, manualM
     finalizedByRole: req.user.sbmsRole,
     finalizedAt: new Date(),
   });
+
+  // Fire-and-forget guardian SMS — covers both the single approve() and
+  // bulkApprove() callers, since they both go through this shared path.
+  const approvedStudent = await Student.findByPk(record.studentId);
+  if (approvedStudent) {
+    notifyGuardianOfDeduction(record, approvedStudent, { typeTitle: type?.title }).catch(() => {});
+  }
+
+  const klass = await Class.findByPk(record.classId);
+
+  logActivity({
+    schoolId: record.schoolId,
+    actorUserId: req.user.id,
+    actorName: req.user.name,
+    actorRole: req.user.sbmsRole,
+    relatedUserId: record.reportedByUserId,
+    category: "reports",
+    action: "report_approved",
+    description: `${req.user.name} approved ${approvedStudent ? `${approvedStudent.firstName} ${approvedStudent.lastName}'s` : "a"} report for ${incidentLabel(type, record.customTitle)}`,
+    entityType: "MisconductRecord",
+    entityId: record.id,
+    studentId: record.studentId,
+    metadata: { className: klass?.name, marksDeducted: appliedDeduction },
+  });
+
   return record;
 }
 
@@ -820,6 +924,24 @@ async function rejectOneRecord(record, req, reason) {
     rejectedByRole: req.user.sbmsRole,
     rejectedAt: new Date(),
   });
+
+  const rejectedStudent = await Student.findByPk(record.studentId);
+  const klass = await Class.findByPk(record.classId);
+  logActivity({
+    schoolId: record.schoolId,
+    actorUserId: req.user.id,
+    actorName: req.user.name,
+    actorRole: req.user.sbmsRole,
+    relatedUserId: record.reportedByUserId,
+    category: "reports",
+    action: "report_rejected",
+    description: `${req.user.name} rejected ${rejectedStudent ? `${rejectedStudent.firstName} ${rejectedStudent.lastName}'s` : "a"} report — ${reason.trim()}`,
+    entityType: "MisconductRecord",
+    entityId: record.id,
+    studentId: record.studentId,
+    metadata: { className: klass?.name },
+  });
+
   return record;
 }
 
@@ -938,6 +1060,7 @@ async function list(req, res, next) {
         { model: MisconductType },
         { model: Student, attributes: ["id", "firstName", "lastName"] },
         { model: Class, attributes: ["id", "name"] },
+        { model: Term, attributes: ["id", "name"] },
         { model: User, as: "reportedBy", attributes: ["id", "name", "role", "disciplineRole"] },
         { model: User, as: "finalizedBy", attributes: ["id", "name", "role", "disciplineRole"] },
         { model: User, as: "rejectedBy", attributes: ["id", "name", "role", "disciplineRole"] },
@@ -1005,6 +1128,24 @@ async function updateReport(req, res, next) {
 
     await record.save();
     await record.reload({ include: [EVIDENCE_INCLUDE] });
+
+    const klass = await Class.findByPk(record.classId);
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: record.reportedByUserId,
+      category: "reports",
+      action: "report_updated",
+      description: `${req.user.name} edited their own pending report`,
+      entityType: "MisconductRecord",
+      entityId: record.id,
+      studentId: record.studentId,
+      metadata: { className: klass?.name },
+    });
+
     res.json(record);
   } catch (err) {
     next(err);
@@ -1032,6 +1173,7 @@ async function deleteReport(req, res, next) {
     }
 
     const evidenceFiles = record.evidence.map((e) => path.join(EVIDENCE_DIR, e.storedName));
+    const klass = await Class.findByPk(record.classId);
 
     await sequelize.transaction(async (t) => {
       const discussion = await Discussion.findOne({ where: { misconductRecordId: record.id }, transaction: t });
@@ -1044,6 +1186,21 @@ async function deleteReport(req, res, next) {
     });
 
     evidenceFiles.forEach((filePath) => fs.unlink(filePath, () => {})); // best-effort cleanup
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: req.user.id,
+      category: "reports",
+      action: "report_withdrawn",
+      description: `${req.user.name} withdrew their own pending report`,
+      entityType: "MisconductRecord",
+      entityId: record.id,
+      studentId: record.studentId,
+      metadata: { className: klass?.name },
+    });
 
     res.status(204).end();
   } catch (err) {
@@ -1068,6 +1225,24 @@ async function addEvidence(req, res, next) {
 
     await saveEvidenceFiles(req.files, record, req.user.id);
     await record.reload({ include: [EVIDENCE_INCLUDE] });
+
+    const klass = await Class.findByPk(record.classId);
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: record.reportedByUserId,
+      category: "reports",
+      action: "evidence_added",
+      description: `${req.user.name} attached ${req.files.length} evidence file${req.files.length === 1 ? "" : "s"} to a record`,
+      entityType: "MisconductRecord",
+      entityId: record.id,
+      studentId: record.studentId,
+      metadata: { className: klass?.name },
+    });
+
     res.status(201).json(record);
   } catch (err) {
     next(err);
@@ -1132,6 +1307,23 @@ async function deleteEvidence(req, res, next) {
     const filePath = path.join(EVIDENCE_DIR, evidence.storedName);
     await evidence.destroy();
     fs.unlink(filePath, () => {}); // best-effort; a dangling file on disk is harmless once the row is gone
+
+    const klass = await Class.findByPk(record.classId);
+
+    logActivity({
+      schoolId: req.schoolId,
+      actorUserId: req.user.id,
+      actorName: req.user.name,
+      actorRole: req.user.sbmsRole,
+      relatedUserId: record.reportedByUserId,
+      category: "reports",
+      action: "evidence_deleted",
+      description: `${req.user.name} removed an evidence file from a record`,
+      entityType: "MisconductRecord",
+      entityId: record.id,
+      studentId: record.studentId,
+      metadata: { className: klass?.name },
+    });
 
     res.status(204).end();
   } catch (err) {

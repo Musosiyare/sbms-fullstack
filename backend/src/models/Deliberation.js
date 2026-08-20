@@ -38,9 +38,10 @@ Deliberation.init(
 
     // dismissed_permanently: expelled outright.
     // dismissed_term: dismissed for the remainder of this term only.
-    // retained: reviewed and kept enrolled despite exceeding marks.
+    // stained: reviewed and kept enrolled despite exceeding marks, but the
+    // case is recorded on their record rather than cleared outright.
     decision: {
-      type: DataTypes.ENUM("dismissed_permanently", "dismissed_term", "retained"),
+      type: DataTypes.ENUM("dismissed_permanently", "dismissed_term", "stained"),
       allowNull: false,
     },
     reason: { type: DataTypes.TEXT, allowNull: true },

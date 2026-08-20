@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "../context/AuthContext";
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
-import Badge from "../components/ui/Badge";
+import Badge, { TextBadge } from "../components/ui/Badge";
 import Modal from "../components/ui/Modal";
 import { Field, Select, Input, Textarea } from "../components/ui/FormField";
 import { ErrorText, TermLockBadge, AllTermsLockedNotice, NotCurrentYearNotice } from "../components/ui/Alerts";
@@ -14,6 +14,7 @@ import { Table, Thead, Th, Td, EmptyRow } from "../components/ui/Table";
 import Pagination from "../components/ui/Pagination";
 import { useConfirm } from "../components/ui/ConfirmProvider";
 import SearchableSelect from "../components/ui/SearchableSelect";
+import { YearSelect } from "../components/ui/PillSelect";
 import { buildMisconductOptions } from "../utils/misconductOptions";
 import { useScopePicker } from "../hooks/useScopePicker";
 import {
@@ -31,16 +32,29 @@ import {
   getTerms,
   getWeekendPermission,
   getStudentScore,
+  getStudentDeliberations,
 } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
 import { getAvatarColor } from "../utils/avatarColor";
 import { exportWeekendPermissionPdf } from "../utils/pdf";
-import { Plus, Check, X, ChevronDown, Eye, ClipboardList, Users, GraduationCap, Clock, AlertTriangle, MessageCircle, Paperclip, Download, Info } from "lucide-react";
+import { Plus, Check, X, ChevronDown, Eye, ClipboardList, Users, GraduationCap, Clock, AlertTriangle, MessageCircle, Paperclip, Download, Info, Cpu } from "lucide-react";
+import { DECISION_TONE, DECISION_EMPHASIS, decisionLabel } from "../utils/deliberation";
 import DiscussionModal from "../components/DiscussionModal";
 
 const CAN_FINALIZE = ["dean_of_discipline", "disciplinary_officer"];
 const STATUS_TONE = { finalized: "ok", pending: "warning", rejected: "danger" };
 const STATUS_LABEL = { finalized: "Approved", pending: "Pending review", rejected: "Rejected" };
+
+// One color per term so the Term column reads at a glance without a
+// pill/badge taking up space — each drawn from a color already used
+// elsewhere in the system (teal matches the sidebar/header, brand is the
+// app's primary accent, amber is the Disciplinary Officer's color) so the
+// palette feels native rather than arbitrary.
+const TERM_TEXT_COLOR = {
+  "Term 1": "text-teal-600",
+  "Term 2": "text-brand-500",
+  "Term 3": "text-amber-600",
+};
 const DISCIPLINE_ROLE_LABEL = { dean_of_discipline: "Dean of Discipline", disciplinary_officer: "Disciplinary Officer" };
 const ROLE_LABEL = { manager: "Manager", teacher: "Teacher", superuser: "Superuser", discipline: "Discipline Staff" };
 
@@ -200,6 +214,13 @@ export default function Records() {
 
   const [activeTab, setActiveTab] = useState(initialParams.get("tab") || "reports");
   const [statusFilter, setStatusFilter] = useState(initialParams.get("status") || "pending");
+  // "Pending review" is the default status filter, but an empty pending
+  // queue isn't a useful landing view — so unless the person explicitly
+  // picked a status (via the dropdown or a deep link), we auto-fall-back
+  // to "All" whenever pending review turns up nothing, and re-try
+  // "pending" first each time the year/class scope changes in case
+  // pending reports exist there.
+  const userChangedStatus = useRef(!!initialParams.get("status"));
   const [pendingRecords, setPendingRecords] = useState(null);
   const [types, setTypes] = useState([]);
   const [approveTarget, setApproveTarget] = useState(null); // record being approved
@@ -230,6 +251,12 @@ export default function Records() {
   const [searchQuery, setSearchQuery] = useState(initialParams.get("search") || "");
   const [weekendFilter, setWeekendFilter] = useState("");
 
+  // Term filter — narrows "All Reports" to one term at a time (or "All
+  // terms"), so it's clear at a glance which term a given record belongs
+  // to instead of every term's reports being mixed together in one list.
+  const [reportTerms, setReportTerms] = useState([]);
+  const [termFilter, setTermFilter] = useState(initialParams.get("termId") || "");
+
   useEffect(() => {
     getAcademicYears().then((years) => {
       setAcademicYears(years);
@@ -257,6 +284,22 @@ export default function Records() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [academicYearId]);
 
+  useEffect(() => {
+    setTermFilter("");
+    if (!academicYearId) {
+      setReportTerms([]);
+      return;
+    }
+    getTerms(academicYearId).then((terms) => {
+      setReportTerms(terms);
+      const requestedTermId = initialParams.get("termId");
+      if (requestedTermId && terms.find((t) => String(t.id) === requestedTermId)) {
+        setTermFilter(requestedTermId);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [academicYearId]);
+
   const isCurrentYearSelected =
     !academicYearId || academicYears.find((y) => String(y.id) === String(academicYearId))?.isCurrent !== false;
 
@@ -265,14 +308,31 @@ export default function Records() {
     const params = { academicYearId };
     if (statusFilter) params.status = statusFilter;
     if (classFilter) params.classId = classFilter;
-    listRecords(params).then(setPendingRecords);
+    if (termFilter) params.termId = termFilter;
+    listRecords(params).then((data) => {
+      setPendingRecords(data);
+      // Auto-fallback: only kicks in while the person hasn't explicitly
+      // picked a status. If "pending" (the default) came back empty,
+      // switch to "All" so they're not staring at a blank queue.
+      if (!userChangedStatus.current && statusFilter === "pending" && data.length === 0) {
+        setStatusFilter("");
+      }
+    });
     setSelectedIds(new Set());
   }
+
+  // Re-try "pending" as the default whenever the year/class scope changes,
+  // so a scope that does have pending reports lands on them again even if
+  // a previous scope had fallen back to "All".
+  useEffect(() => {
+    if (!userChangedStatus.current) setStatusFilter("pending");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [academicYearId, classFilter, termFilter]);
 
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, academicYearId, classFilter]);
+  }, [statusFilter, academicYearId, classFilter, termFilter]);
 
   // Weekend status of a record: "away" = currently serving a send-home
   // period (today falls in [from, to], or from is set with no to yet),
@@ -313,7 +373,7 @@ export default function Records() {
   const [reportsPage, setReportsPage] = useState(1);
   useEffect(() => {
     setReportsPage(1);
-  }, [statusFilter, academicYearId, classFilter, searchQuery, weekendFilter]);
+  }, [statusFilter, academicYearId, classFilter, termFilter, searchQuery, weekendFilter]);
   const reportsPageCount = Math.max(1, Math.ceil(visibleRecords.length / REPORTS_PAGE_SIZE));
   const currentReportsPage = Math.min(reportsPage, reportsPageCount);
   const pagedRecords = visibleRecords.slice(
@@ -369,17 +429,21 @@ export default function Records() {
       >
         <div className="mb-4 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           <Field label="Academic year">
-            <Select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)}>
-              {academicYears.map((y) => (
-                <option key={y.id} value={y.id}>
-                  {y.name}
-                  {y.isCurrent ? " (current)" : ""}
-                </option>
-              ))}
-            </Select>
+            <YearSelect
+              fullWidth
+              options={academicYears.map((y) => ({ id: y.id, label: y.name, isCurrent: y.isCurrent }))}
+              value={academicYearId}
+              onChange={setAcademicYearId}
+            />
           </Field>
           <Field label="Status">
-            <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <Select
+              value={statusFilter}
+              onChange={(e) => {
+                userChangedStatus.current = true;
+                setStatusFilter(e.target.value);
+              }}
+            >
               <option value="pending">Pending review</option>
               <option value="finalized">Approved</option>
               <option value="rejected">Rejected</option>
@@ -392,6 +456,16 @@ export default function Records() {
               {reportClasses.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Term">
+            <Select value={termFilter} onChange={(e) => setTermFilter(e.target.value)} disabled={!reportTerms.length}>
+              <option value="">All terms</option>
+              {reportTerms.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
                 </option>
               ))}
             </Select>
@@ -451,6 +525,7 @@ export default function Records() {
                 </Th>
               )}
               <Th>Student</Th>
+              <Th>Term</Th>
               <Th>Incident</Th>
               <Th>Marks</Th>
               <Th>Sent home</Th>
@@ -463,11 +538,11 @@ export default function Records() {
           </Thead>
           <tbody>
             {pendingRecords === null ? (
-              <EmptyRow colSpan={(showBulkColumn ? 1 : 0) + 8 + (canFinalize && isCurrentYearSelected ? 1 : 0)}>
+              <EmptyRow colSpan={(showBulkColumn ? 1 : 0) + 9 + (canFinalize && isCurrentYearSelected ? 1 : 0)}>
                 Loading...
               </EmptyRow>
             ) : visibleRecords.length === 0 ? (
-              <EmptyRow colSpan={(showBulkColumn ? 1 : 0) + 8 + (canFinalize && isCurrentYearSelected ? 1 : 0)}>
+              <EmptyRow colSpan={(showBulkColumn ? 1 : 0) + 9 + (canFinalize && isCurrentYearSelected ? 1 : 0)}>
                 {pendingRecords.length === 0 ? undefined : "No reports match these filters."}
               </EmptyRow>
             ) : (
@@ -490,6 +565,11 @@ export default function Records() {
                       {r.Student?.firstName} {r.Student?.lastName}
                     </p>
                     <p className="text-xs text-slate-400">{r.Class?.name || "—"}</p>
+                  </Td>
+                  <Td>
+                    <span className={`text-xs font-bold uppercase tracking-wide ${TERM_TEXT_COLOR[r.Term?.name] || "text-slate-400"}`}>
+                      {r.Term?.name || "—"}
+                    </span>
                   </Td>
                   <Td>
                     <span className="inline-flex items-center gap-1.5">
@@ -823,13 +903,12 @@ function ClassBrowser() {
     <Card title="Student Records" subtitle="Open a class to see its students, then view a student's full incident history.">
       <div className="grid sm:grid-cols-2 gap-4 mb-5 max-w-md">
         <Field label="Academic year">
-          <Select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)}>
-            {academicYears.map((y) => (
-              <option key={y.id} value={y.id}>
-                {y.name}
-              </option>
-            ))}
-          </Select>
+          <YearSelect
+            fullWidth
+            options={academicYears.map((y) => ({ id: y.id, label: y.name, isCurrent: y.isCurrent }))}
+            value={academicYearId}
+            onChange={setAcademicYearId}
+          />
         </Field>
         <Field label="Term">
           <Select value={termId} onChange={(e) => setTermId(e.target.value)} disabled={!terms.length}>
@@ -1010,6 +1089,7 @@ function ClassBrowser() {
         <StudentRecordsModal
           student={viewStudent}
           currentUser={user}
+          initialTermId={termId}
           onClose={() => setViewStudent(null)}
           onRecordChanged={refreshExpandedCounts}
         />
@@ -1026,20 +1106,34 @@ function ClassBrowser() {
  * MARKS_PER_TERM-based math, just recomputed per-record here since there's
  * no running-balance endpoint.
  */
-function StudentRecordsModal({ student, currentUser, onClose, onRecordChanged }) {
+function StudentRecordsModal({ student, currentUser, initialTermId, onClose, onRecordChanged }) {
   const [records, setRecords] = useState(null);
   const [termLabels, setTermLabels] = useState({}); // termId -> "Term 2 · 2025-2026"
+  const [deliberationsByKey, setDeliberationsByKey] = useState({}); // "academicYearId-termId" -> deliberation
   const [approveTarget, setApproveTarget] = useState(null);
   const [rejectTarget, setRejectTarget] = useState(null);
+  // Mirrors whichever term the roster's own term filter was set to when
+  // the eye icon was clicked, so this modal opens already scoped to the
+  // same term instead of dumping every term's incidents together
+  // regardless of what was selected out on the roster.
+  const [termFilter, setTermFilter] = useState(initialTermId ? String(initialTermId) : "");
 
   const canFinalize = CAN_FINALIZE.includes(currentUser.sbmsRole);
 
   function refresh() {
     listRecords({ studentId: student.id }).then(setRecords);
+    getStudentDeliberations(student.id).then((rows) => {
+      const byKey = {};
+      rows.forEach((d) => {
+        byKey[`${d.academicYearId}-${d.termId}`] = d;
+      });
+      setDeliberationsByKey(byKey);
+    });
   }
 
   useEffect(() => {
     refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [student.id]);
 
   useEffect(() => {
@@ -1060,7 +1154,12 @@ function StudentRecordsModal({ student, currentUser, onClose, onRecordChanged })
     );
   }, [records]);
 
-  const groups = groupRecordsByTerm(records, termLabels);
+  const allGroups = groupRecordsByTerm(records, termLabels);
+  // Every distinct term that actually has incidents, used to populate the
+  // filter dropdown — pulled from the groups themselves so it only ever
+  // lists terms this student has something recorded in.
+  const termOptions = allGroups.map((g) => ({ termId: String(g.records[0]?.termId ?? ""), label: g.label }));
+  const groups = termFilter ? allGroups.filter((g) => String(g.records[0]?.termId) === termFilter) : allGroups;
 
   return (
     <Modal
@@ -1069,13 +1168,31 @@ function StudentRecordsModal({ student, currentUser, onClose, onRecordChanged })
       title={`${student.firstName} ${student.lastName} — incident history`}
       size="full"
     >
+      {termOptions.length > 1 && (
+        <div className="mb-4 max-w-xs">
+          <Field label="Term">
+            <Select value={termFilter} onChange={(e) => setTermFilter(e.target.value)}>
+              <option value="">All terms</option>
+              {termOptions.map((t) => (
+                <option key={t.termId} value={t.termId}>
+                  {t.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+      )}
       {records === null ? (
         <p className="text-sm text-slate-400 py-8 text-center">Loading...</p>
       ) : records.length === 0 ? (
         <p className="text-sm text-slate-400 py-8 text-center">No incidents recorded for this student.</p>
+      ) : groups.length === 0 ? (
+        <p className="text-sm text-slate-400 py-8 text-center">No incidents recorded for this student in that term.</p>
       ) : (
         <div className="flex flex-col gap-6">
-          {groups.map((group) => (
+          {groups.map((group) => {
+            const deliberation = deliberationsByKey[group.key];
+            return (
             <div key={group.key}>
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-sm font-semibold text-slate-700">{group.label}</h4>
@@ -1083,6 +1200,24 @@ function StudentRecordsModal({ student, currentUser, onClose, onRecordChanged })
                   {group.finalRemaining}/{MARKS_PER_TERM} remaining
                 </Badge>
               </div>
+              {deliberation && (
+                <div className="mb-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-slate-50 px-3 py-2 border border-slate-100">
+                  <span className="text-xs text-slate-400">Deliberation:</span>
+                  <TextBadge tone={DECISION_TONE[deliberation.decision]} className={DECISION_EMPHASIS[deliberation.decision]}>
+                    {decisionLabel(deliberation.decision, group.label)}
+                  </TextBadge>
+                  {deliberation.reason && <span className="text-xs text-slate-500">— {deliberation.reason}</span>}
+                  <span className="text-xs text-slate-400">
+                    {deliberation.bySystem ? (
+                      <span className="inline-flex items-center gap-1 text-violet-700">
+                        <Cpu size={11} /> Auto-decided by the system
+                      </span>
+                    ) : (
+                      <>by {deliberation.decidedBy || "—"} · {fmtDate(deliberation.decidedAt)}</>
+                    )}
+                  </span>
+                </div>
+              )}
               <div className="flex flex-col gap-2.5">
                 {group.records.map((r) => (
                   <div
@@ -1180,7 +1315,8 @@ function StudentRecordsModal({ student, currentUser, onClose, onRecordChanged })
                 ))}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -1735,6 +1871,7 @@ function ClassDeductModal({ types, onClose, onDone }) {
   const [excludedIds, setExcludedIds] = useState(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [marksError, setMarksError] = useState("");
 
   // Starting fresh with nobody excluded whenever the roster changes (new
   // class picked) — an exclusion from a previous class shouldn't carry
@@ -1772,6 +1909,7 @@ function ClassDeductModal({ types, onClose, onDone }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
+    setMarksError("");
     if (!scope.classId || !scope.termId || !scope.academicYearId) {
       setError("Pick the class and term.");
       return;
@@ -1793,7 +1931,11 @@ function ClassDeductModal({ types, onClose, onDone }) {
       return;
     }
     if (!marksDeducted || Number(marksDeducted) <= 0) {
-      setError("Marks deducted must be a positive number.");
+      setMarksError("Marks deducted must be a positive number.");
+      return;
+    }
+    if (Number(marksDeducted) > MAX_TERM_MARKS) {
+      setMarksError(`Marks deducted can't exceed ${MAX_TERM_MARKS} — a term's total conduct marks.`);
       return;
     }
     // Whether this exceeds the term's total conduct marks is checked and
@@ -1865,14 +2007,13 @@ function ClassDeductModal({ types, onClose, onDone }) {
         </p>
         <div className="grid sm:grid-cols-2 gap-4">
           <Field label="Academic year">
-            <Select value={scope.academicYearId} onChange={(e) => scope.setAcademicYearId(e.target.value)}>
-              <option value="">Select...</option>
-              {scope.academicYears.map((y) => (
-                <option key={y.id} value={y.id}>
-                  {y.name}
-                </option>
-              ))}
-            </Select>
+            <YearSelect
+              fullWidth
+              options={scope.academicYears.map((y) => ({ id: y.id, label: y.name, isCurrent: y.isCurrent }))}
+              value={scope.academicYearId}
+              onChange={scope.setAcademicYearId}
+              emptyLabel="Select..."
+            />
           </Field>
           <Field label="Term">
             <Select
@@ -1894,9 +2035,11 @@ function ClassDeductModal({ types, onClose, onDone }) {
 
         {scope.terms.length > 0 && scope.terms.every((t) => t.isLocked) && <AllTermsLockedNotice />}
         {!scope.isCurrentAcademicYear && (
-          <NotCurrentYearNotice
-            yearName={scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId))?.name}
-          />
+          <div className="mb-4">
+            <NotCurrentYearNotice
+              yearName={scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId))?.name}
+            />
+          </div>
         )}
 
         <Field label="Class">
@@ -1945,7 +2088,7 @@ function ClassDeductModal({ types, onClose, onDone }) {
         ) : (
           <Field label="Misconduct type">
             <SearchableSelect
-              options={buildMisconductOptions(types.filter((t) => !t.requiresSendHome))}
+              options={buildMisconductOptions(types.filter((t) => t.isActive && !t.requiresSendHome))}
               value={misconductTypeId}
               onChange={handleTypeChange}
               disabled={!scope.isCurrentAcademicYear}
@@ -1979,9 +2122,13 @@ function ClassDeductModal({ types, onClose, onDone }) {
             <Input
               type="number"
               value={marksDeducted}
-              onChange={(e) => setMarksDeducted(e.target.value)}
+              onChange={(e) => {
+                setMarksDeducted(e.target.value);
+                if (marksError) setMarksError("");
+              }}
               disabled={!scope.isCurrentAcademicYear}
             />
+            {marksError && <ErrorText>{marksError}</ErrorText>}
           </Field>
         ) : (
           <Field label="Marks deducted">
@@ -2077,6 +2224,7 @@ function NewRecordModal({ types, onClose, onDone }) {
   const [sentHomeTo, setSentHomeTo] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [marksError, setMarksError] = useState("");
   const [useCustom, setUseCustom] = useState(false);
   const [studentWarning, setStudentWarning] = useState(null); // { title, until } | null
   const [marksExceeded, setMarksExceeded] = useState(false);
@@ -2142,6 +2290,7 @@ function NewRecordModal({ types, onClose, onDone }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
+    setMarksError("");
     if (!scope.studentId || !scope.termId || !scope.academicYearId) {
       setError("Pick the student, class, and term.");
       return;
@@ -2171,7 +2320,11 @@ function NewRecordModal({ types, onClose, onDone }) {
       return;
     }
     if (!marksDeducted || Number(marksDeducted) <= 0) {
-      setError("Marks deducted must be a positive number.");
+      setMarksError("Marks deducted must be a positive number.");
+      return;
+    }
+    if (Number(marksDeducted) > MAX_TERM_MARKS) {
+      setMarksError(`Marks deducted can't exceed ${MAX_TERM_MARKS} — a term's total conduct marks.`);
       return;
     }
     // Whether this exceeds the term's total conduct marks is checked and
@@ -2235,14 +2388,13 @@ function NewRecordModal({ types, onClose, onDone }) {
         </p>
         <div className="grid sm:grid-cols-2 gap-4">
           <Field label="Academic year">
-            <Select value={scope.academicYearId} onChange={(e) => scope.setAcademicYearId(e.target.value)}>
-              <option value="">Select...</option>
-              {scope.academicYears.map((y) => (
-                <option key={y.id} value={y.id}>
-                  {y.name}
-                </option>
-              ))}
-            </Select>
+            <YearSelect
+              fullWidth
+              options={scope.academicYears.map((y) => ({ id: y.id, label: y.name, isCurrent: y.isCurrent }))}
+              value={scope.academicYearId}
+              onChange={scope.setAcademicYearId}
+              emptyLabel="Select..."
+            />
           </Field>
           <Field label="Term">
             <Select
@@ -2264,9 +2416,11 @@ function NewRecordModal({ types, onClose, onDone }) {
 
         {scope.terms.length > 0 && scope.terms.every((t) => t.isLocked) && <AllTermsLockedNotice />}
         {!scope.isCurrentAcademicYear && (
-          <NotCurrentYearNotice
-            yearName={scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId))?.name}
-          />
+          <div className="mb-4">
+            <NotCurrentYearNotice
+              yearName={scope.academicYears.find((y) => String(y.id) === String(scope.academicYearId))?.name}
+            />
+          </div>
         )}
 
         <div className="grid sm:grid-cols-2 gap-4">
@@ -2361,7 +2515,7 @@ function NewRecordModal({ types, onClose, onDone }) {
         ) : (
           <Field label="Misconduct type">
             <SearchableSelect
-              options={buildMisconductOptions(types)}
+              options={buildMisconductOptions(types.filter((t) => t.isActive))}
               value={misconductTypeId}
               onChange={handleTypeChange}
               disabled={!scope.isCurrentAcademicYear}
@@ -2391,9 +2545,13 @@ function NewRecordModal({ types, onClose, onDone }) {
             <Input
               type="number"
               value={marksDeducted}
-              onChange={(e) => setMarksDeducted(e.target.value)}
+              onChange={(e) => {
+                setMarksDeducted(e.target.value);
+                if (marksError) setMarksError("");
+              }}
               disabled={!scope.isCurrentAcademicYear}
             />
+            {marksError && <ErrorText>{marksError}</ErrorText>}
           </Field>
         ) : (
           <Field label="Marks deducted">

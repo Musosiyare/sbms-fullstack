@@ -12,7 +12,7 @@ import { useAuth } from "../context/AuthContext";
 import PillSelect from "../components/ui/PillSelect";
 import { getMisconductTypes, createMisconductType, updateMisconductType, deleteMisconductType } from "../api/sbms";
 import { capitalizeFirst } from "../utils/text";
-import { Plus, Pencil, Trash2, Search } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, Power } from "lucide-react";
 
 const SEVERITY_TONE = { minor: "neutral", moderate: "warning", severe: "danger" };
 const DEDUCTION_TONE = {
@@ -29,6 +29,7 @@ export default function MisconductTypes() {
   const [editing, setEditing] = useState(null); // type being edited, or {} for new
   const [search, setSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState(""); // "" = all
+  const [statusFilter, setStatusFilter] = useState(""); // "" = all, "active", "inactive"
 
   function refresh() {
     getMisconductTypes().then(setTypes);
@@ -38,25 +39,65 @@ export default function MisconductTypes() {
 
   const filteredTypes = (types || []).filter((t) => {
     if (severityFilter && t.severity !== severityFilter) return false;
+    if (statusFilter === "active" && !t.isActive) return false;
+    if (statusFilter === "inactive" && t.isActive) return false;
     const q = search.trim().toLowerCase();
     if (!q) return true;
     return t.title.toLowerCase().includes(q) || (t.description || "").toLowerCase().includes(q);
   });
 
   async function handleDelete(type) {
+    if (type.recordsCount > 0) {
+      await confirm({
+        title: "Can't delete — it's in use",
+        message: (
+          <>
+            <strong className="font-semibold text-slate-800">"{type.title}"</strong> is attached to{" "}
+            <strong className="font-semibold text-slate-800">
+              {type.recordsCount} existing record{type.recordsCount === 1 ? "" : "s"}
+            </strong>
+            . Deleting it would break those records' history, so it's blocked.
+            <br />
+            <br />
+            Deactivate it instead — it will disappear from the picker for new incidents, while every record that
+            already references it keeps working exactly as before.
+          </>
+        ),
+        confirmText: "Got it",
+        cancelText: "Close",
+        tone: "danger",
+      });
+      return;
+    }
     const ok = await confirm({
-      title: "Disable this misconduct type?",
-      message: `"${type.title}" will no longer appear when picking a type — existing records that reference it are unaffected.`,
-      confirmText: "Disable",
+      title: "Delete this misconduct type?",
+      message: (
+        <>
+          <strong className="font-semibold text-slate-800">"{type.title}"</strong> will be permanently deleted —
+          this can't be undone.
+        </>
+      ),
+      confirmText: "Delete",
       tone: "danger",
     });
     if (!ok) return;
     try {
       await deleteMisconductType(type.id);
-      toast.success("Misconduct type disabled");
+      toast.success("Misconduct type deleted");
       refresh();
     } catch (err) {
-      toast.error("Couldn't disable type", { description: err.message });
+      toast.error("Couldn't delete type", { description: err.message });
+    }
+  }
+
+  async function handleToggleActive(type) {
+    const nextActive = !type.isActive;
+    try {
+      await updateMisconductType(type.id, { isActive: nextActive });
+      toast.success(nextActive ? "Misconduct type activated" : "Misconduct type deactivated");
+      refresh();
+    } catch (err) {
+      toast.error("Couldn't update status", { description: err.message });
     }
   }
 
@@ -91,6 +132,15 @@ export default function MisconductTypes() {
           value={severityFilter}
           onChange={setSeverityFilter}
         />
+        <PillSelect
+          options={[
+            { id: "", label: `Any status` },
+            { id: "active", label: `Active (${(types || []).filter((t) => t.isActive).length})` },
+            { id: "inactive", label: `Inactive (${(types || []).filter((t) => !t.isActive).length})` },
+          ]}
+          value={statusFilter}
+          onChange={setStatusFilter}
+        />
       </div>
 
       <Table>
@@ -100,22 +150,31 @@ export default function MisconductTypes() {
             <Th>Severity</Th>
             <Th>Default deduction</Th>
             <Th>Scope</Th>
+            <Th>Status</Th>
             {canManage && <Th></Th>}
           </tr>
         </Thead>
         <tbody>
           {types === null ? (
-            <EmptyRow colSpan={canManage ? 5 : 4}>Loading...</EmptyRow>
+            <EmptyRow colSpan={canManage ? 6 : 5}>Loading...</EmptyRow>
           ) : filteredTypes.length === 0 ? (
-            <EmptyRow colSpan={canManage ? 5 : 4}>{search || severityFilter ? "No matches for your filters." : ""}</EmptyRow>
+            <EmptyRow colSpan={canManage ? 6 : 5}>
+              {search || severityFilter || statusFilter ? "No matches for your filters." : ""}
+            </EmptyRow>
           ) : (
             filteredTypes.map((t) => (
-              <tr key={t.id}>
+              <tr key={t.id} className={!t.isActive ? "bg-slate-50/60" : ""}>
                 <Td>
-                  <p className="font-medium text-slate-800">{capitalizeFirst(t.title)}</p>
-                  {t.description && <p className="text-xs text-slate-400">{t.description}</p>}
+                  <p className={t.isActive ? "font-medium text-slate-800" : "font-normal italic text-slate-400"}>
+                    {capitalizeFirst(t.title)}
+                  </p>
+                  {t.description && (
+                    <p className={`text-xs ${t.isActive ? "text-slate-400" : "italic text-slate-300"}`}>
+                      {t.description}
+                    </p>
+                  )}
                   {t.requiresSendHome && (
-                    <p className="mt-1 text-xs text-amber-600 font-medium">
+                    <p className={`mt-1 text-xs font-medium ${t.isActive ? "text-amber-600" : "italic text-slate-300"}`}>
                       Sent home {t.sendHomeDays} day{t.sendHomeDays === 1 ? "" : "s"}
                     </p>
                   )}
@@ -133,15 +192,54 @@ export default function MisconductTypes() {
                   </span>
                 </Td>
                 <Td>{t.schoolId ? t.School?.name || "This school" : "Global template"}</Td>
+                <Td>
+                  {canManage && t.schoolId ? (
+                    <button
+                      onClick={() => handleToggleActive(t)}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                        t.isActive
+                          ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-100"
+                          : "bg-slate-100 text-slate-500 ring-1 ring-slate-200 hover:bg-slate-200"
+                      }`}
+                      title={t.isActive ? "Deactivate" : "Activate"}
+                    >
+                      <Power size={12} />
+                      {t.isActive ? "Active" : "Inactive"}
+                    </button>
+                  ) : (
+                    <Badge tone={t.isActive ? "ok" : "neutral"}>{t.isActive ? "Active" : "Inactive"}</Badge>
+                  )}
+                </Td>
                 {canManage && (
                   <Td>
-                    <div className="flex gap-2">
-                      <button onClick={() => setEditing(t)} className="text-brand-500 hover:text-brand-700" aria-label="Edit">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => t.isActive && setEditing(t)}
+                        disabled={!t.isActive}
+                        className={
+                          t.isActive
+                            ? "rounded-lg p-1.5 text-brand-500 hover:bg-brand-50 hover:text-brand-700 transition-colors"
+                            : "rounded-lg p-1.5 text-slate-300 cursor-not-allowed"
+                        }
+                        aria-label="Edit"
+                        title={t.isActive ? "Edit" : "Reactivate first to edit"}
+                      >
                         <Pencil size={15} />
                       </button>
-                      <button onClick={() => handleDelete(t)} className="text-red-500 hover:text-red-700" aria-label="Disable">
-                        <Trash2 size={15} />
-                      </button>
+                      {t.schoolId && (
+                        <button
+                          onClick={() => handleDelete(t)}
+                          className={
+                            t.recordsCount > 0
+                              ? "rounded-lg p-1.5 text-slate-300 cursor-not-allowed"
+                              : "rounded-lg p-1.5 text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors"
+                          }
+                          aria-label="Delete"
+                          title={t.recordsCount > 0 ? `Used by ${t.recordsCount} record${t.recordsCount === 1 ? "" : "s"} — can't be deleted` : "Delete"}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </div>
                   </Td>
                 )}
