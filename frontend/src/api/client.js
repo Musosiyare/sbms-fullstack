@@ -10,6 +10,7 @@ const api = axios.create({
 // touch the other's session.
 const TOKEN_KEY = "sbms_token";
 const USER_KEY = "sbms_user";
+const SCHOOL_KEY = "sbms_school";
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -39,6 +40,7 @@ api.interceptors.response.use(
     if (sessionKilled && window.location.pathname !== "/login") {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(SCHOOL_KEY);
       // Stashed for the Login page to show as soon as it mounts — the
       // redirect below is a full page load, so React state can't carry it.
       if (apiError?.message) sessionStorage.setItem(LOGIN_NOTICE_KEY, apiError.message);
@@ -55,5 +57,5 @@ api.interceptors.response.use(
   }
 );
 
-export { TOKEN_KEY, USER_KEY, LOGIN_NOTICE_KEY };
+export { TOKEN_KEY, USER_KEY, SCHOOL_KEY, LOGIN_NOTICE_KEY };
 export default api;

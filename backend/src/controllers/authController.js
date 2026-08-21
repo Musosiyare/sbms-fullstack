@@ -33,19 +33,37 @@ const { resolveSbmsRole } = require("../utils/resolveSbmsRole");
  * verified, so a wrong guess never reveals anything about a real
  * account's status or role.
  *
+ * Credential errors below are also split into distinct messages (email
+ * not found vs. wrong password) at Thacien's request, since SBMS is a
+ * closed staff system rather than public signup — there's no meaningful
+ * account-enumeration risk from staff telling each other "that email
+ * isn't registered." When the email itself doesn't match any account,
+ * there's nothing real to check the password against either, so that
+ * case is reported as both being invalid rather than singling out the
+ * email as if the password would otherwise have been fine.
+ *
  * Neither `role` nor `disciplineRole` is ever written from SBMS — both are
  * read-only here.
  */
 async function login(req, res, next) {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return next(ApiError.badRequest("Email and password are required"));
+    if (!email && !password) return next(ApiError.badRequest("Email and password are required"));
+    if (!email) return next(ApiError.badRequest("Invalid email — email is required", "email"));
+    if (!password) return next(ApiError.badRequest("Invalid password — password is required", "password"));
 
     const user = await User.findOne({ where: { email } });
-    if (!user) return next(ApiError.unauthorized("Invalid email or password"));
+    if (!user) {
+      return next(
+        ApiError.unauthorized(
+          "Invalid email and password — no account matches these credentials.",
+          "INVALID_CREDENTIALS"
+        )
+      );
+    }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) return next(ApiError.unauthorized("Invalid email or password"));
+    if (!valid) return next(ApiError.unauthorized("Invalid password.", "INVALID_PASSWORD"));
 
     if (user.role === "superuser") {
       return next(ApiError.forbidden("This account does not have access to this system"));

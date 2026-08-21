@@ -178,21 +178,63 @@ function flattenNav(groups) {
 }
 
 const PAGE_META = {
-  "/dashboard": { title: "Dashboard", subtitle: "Here's what needs attention." },
-  "/report": { title: "Report a Mistake", subtitle: "Flag an incident for the discipline office to review." },
-  "/records": { title: "Records", subtitle: "Pending reports and finalized misconduct records." },
-  "/discussions": { title: "Discussions", subtitle: "Case-conference threads on students' mistakes." },
-  "/activity-log": { title: "Activity Log", subtitle: "What's happened in SBMS, scoped to what your role can see." },
-  "/class-report": { title: "Termly Report", subtitle: "Termly conduct scores, per student." },
-  "/yearly-report": { title: "Yearly Report", subtitle: "All three terms combined — promotion or dismissal, per student." },
-  "/dismissed-students": { title: "Dismissed Students", subtitle: "Every dismissed student — permanently, or for a term." },
-  "/misconduct-types": { title: "Misconduct Types", subtitle: "The catalog of offenses and their default deductions." },
-  "/staff-roles": { title: "Staff Roles", subtitle: "Assign Dean of Discipline and Disciplinary Officer access." },
-  "/profile": { title: "Profile", subtitle: "Your account and password." },
+  "/dashboard": { title: "Dashboard", subtitle: "Here's what needs attention.", icon: LayoutDashboard },
+  "/report": { title: "Report a Mistake", subtitle: "Flag an incident for the discipline office to review.", icon: FlagTriangleRight },
+  "/records": { title: "Records", subtitle: "Pending reports and finalized misconduct records.", icon: ClipboardList },
+  "/discussions": { title: "Discussions", subtitle: "Case-conference threads on students' mistakes.", icon: MessageCircle },
+  "/activity-log": { title: "Activity Log", subtitle: "What's happened in SBMS, scoped to what your role can see.", icon: History },
+  "/class-report": { title: "Termly Report", subtitle: "Termly conduct scores, per student.", icon: BarChart3 },
+  "/yearly-report": { title: "Yearly Report", subtitle: "All three terms combined — promotion or dismissal, per student.", icon: GraduationCap },
+  "/dismissed-students": { title: "Dismissed Students", subtitle: "Every dismissed student — permanently, or for a term.", icon: UserX },
+  "/misconduct-types": { title: "Misconduct Types", subtitle: "The catalog of offenses and their default deductions.", icon: ListChecks },
+  "/staff-roles": { title: "Staff Roles", subtitle: "Assign Dean of Discipline and Disciplinary Officer access.", icon: UserCog },
+  "/profile": { title: "Profile", subtitle: "Your account and password.", icon: UserRound },
 };
 
+// School logo for the sidebar brand mark, falling back to the generic
+// shield icon (first load before the fetch resolves, no logo uploaded
+// yet, or the image URL failing to load).
+function BrandMark({ school, accentClass, size = 40, iconSize = 19 }) {
+  const [broken, setBroken] = useState(false);
+  const px = `${size}px`;
+  if (school?.logoUrl && !broken) {
+    return (
+      <img
+        src={school.logoUrl}
+        alt={school.name ? `${school.name} logo` : "School logo"}
+        onError={() => setBroken(true)}
+        className="shrink-0 rounded-xl object-cover shadow-sm ring-1 ring-white/10"
+        style={{ width: px, height: px }}
+      />
+    );
+  }
+  return (
+    <div
+      className={`flex shrink-0 items-center justify-center rounded-xl ${accentClass} text-white shadow-sm ring-1 ring-white/10 transition-transform group-hover:scale-105`}
+      style={{ width: px, height: px }}
+    >
+      <ShieldAlert size={iconSize} />
+    </div>
+  );
+}
+
+// Header brand mark for the current page — same colored square as
+// BrandMark, but always shows that page's own nav icon (matching the
+// sidebar) rather than the school logo or a fixed shield.
+function PageIcon({ icon: Icon, accentClass, size = 30, iconSize = 14 }) {
+  const px = `${size}px`;
+  return (
+    <div
+      className={`flex shrink-0 items-center justify-center rounded-xl ${accentClass} text-white shadow-sm ring-1 ring-white/10`}
+      style={{ width: px, height: px }}
+    >
+      <Icon size={iconSize} />
+    </div>
+  );
+}
+
 export default function Layout({ children }) {
-  const { user, logout } = useAuth();
+  const { user, school, logout } = useAuth();
   const confirm = useConfirm();
   const location = useLocation();
   const navigate = useNavigate();
@@ -228,11 +270,26 @@ export default function Layout({ children }) {
     }
   }, [collapsed]);
 
+  const page = PAGE_META[location.pathname] || { title: "SBMS", subtitle: "", icon: ShieldAlert };
+
+  // Browser tab title mirrors the in-app breadcrumb — "SBMS - Records" —
+  // so it's clear which page a tab is on when several are open at once.
+  // This effect (and everything above it) must run on every render,
+  // logged in or not — hooks can't sit after the early `return children`
+  // below, or React ends up calling a different number of hooks between
+  // a logged-out and logged-in render, which corrupts component state
+  // right after login/logout until a full page refresh clears it.
+  useEffect(() => {
+    document.title = `Behavior - ${page.title}`;
+    return () => {
+      document.title = "SBMS — Student Behavior Management System";
+    };
+  }, [page.title]);
+
   if (!user || location.pathname === "/") return children;
 
   const meta = ROLE_META[user.sbmsRole] || ROLE_META.reporter;
   const nav = flattenNav(groups);
-  const page = PAGE_META[location.pathname] || { title: "SBMS", subtitle: "" };
 
   async function handleLogout() {
     setMobileOpen(false);
@@ -357,11 +414,7 @@ export default function Layout({ children }) {
             collapsed ? "justify-center px-3" : "gap-3 px-5"
           }`}
         >
-          <div
-            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${meta.accent} text-white shadow-sm ring-1 ring-white/10 transition-transform group-hover:scale-105`}
-          >
-            <ShieldAlert size={19} />
-          </div>
+          <BrandMark school={school} accentClass={meta.accent} size={40} iconSize={19} />
           {!collapsed && (
             <div className="min-w-0">
               <p className="font-header text-2xl font-extrabold leading-none tracking-tight text-white">SBMS</p>
@@ -442,11 +495,7 @@ export default function Layout({ children }) {
                 onClick={() => setMobileOpen(false)}
                 className="group flex items-center gap-3"
               >
-                <div
-                  className={`flex h-10 w-10 items-center justify-center rounded-xl ${meta.accent} text-white shadow-sm ring-1 ring-white/10 transition-transform group-hover:scale-105`}
-                >
-                  <ShieldAlert size={19} />
-                </div>
+                <BrandMark school={school} accentClass={meta.accent} size={40} iconSize={19} />
                 <div className="min-w-0">
                   <p className="font-header text-2xl font-extrabold leading-none tracking-tight text-white">SBMS</p>
                   <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
@@ -493,9 +542,15 @@ export default function Layout({ children }) {
           >
             {collapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
           </button>
-          <div className="min-w-0 shrink-0">
-            <h1 className="text-lg font-extrabold text-white font-header tracking-tight truncate">{page.title}</h1>
-            {page.subtitle && <p className="text-sm text-teal-200 truncate hidden sm:block">{page.subtitle}</p>}
+          <div className="flex items-center gap-2.5 min-w-0 shrink-0">
+            <PageIcon icon={page.icon} accentClass={meta.accent} size={30} iconSize={14} />
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-teal-300/80 truncate">
+                SBMS <span className="text-teal-300/50">-</span> {page.title}
+              </p>
+              <h1 className="text-lg font-extrabold text-white font-header tracking-tight truncate">{page.title}</h1>
+              {page.subtitle && <p className="text-sm text-teal-200 truncate hidden sm:block">{page.subtitle}</p>}
+            </div>
           </div>
 
           {user.sbmsRole !== "reporter" && (

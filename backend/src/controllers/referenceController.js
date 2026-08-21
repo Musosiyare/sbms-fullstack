@@ -1,4 +1,4 @@
-const { AcademicYear, Term, Class, Student, User, TeacherModuleAssignment, Deliberation, sequelize } = require("../models");
+const { School, AcademicYear, Term, Class, Student, User, TeacherModuleAssignment, Deliberation, sequelize } = require("../models");
 const { Op } = require("sequelize");
 const ApiError = require("../utils/ApiError");
 const conductScoreService = require("../services/conductScoreService");
@@ -270,4 +270,22 @@ async function disciplineStaff(req, res, next) {
   }
 }
 
-module.exports = { academicYears, terms, classes, students, searchStudents, disciplineStaff };
+/**
+ * The current school's own display info (name + logo) for the sidebar
+ * brand mark and header. Read-only, same as every other endpoint in this
+ * file — logoUrl is whatever the main system's manager has uploaded there
+ * (a full URL already, see its uploadSchoolLogo controller), so the
+ * frontend can drop it straight into an <img src>.
+ */
+async function school(req, res, next) {
+  try {
+    if (!req.schoolId) return next(ApiError.badRequest("schoolId is required", "schoolId"));
+    const record = await School.findByPk(req.schoolId, { attributes: ["id", "name", "logoUrl"] });
+    if (!record) return next(ApiError.notFound("School not found"));
+    res.json(record);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { academicYears, terms, classes, students, searchStudents, disciplineStaff, school };

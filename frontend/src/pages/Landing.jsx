@@ -322,7 +322,7 @@ export default function Landing() {
               <ShieldCheck size={17} strokeWidth={2.25} />
             </div>
             <div className="leading-tight">
-              <p className="font-display text-base font-semibold text-slate-800">SBMS</p>
+              <p className="font-header text-base font-extrabold tracking-tight text-slate-800">SBMS</p>
               <p className="text-[10px] uppercase tracking-[0.14em] text-slate-400">Behavior Management</p>
             </div>
           </div>
@@ -620,7 +620,10 @@ export default function Landing() {
         <div className="mx-auto flex max-w-6xl flex-col items-center gap-3 px-6 sm:flex-row sm:justify-between">
           <div className="flex items-center gap-2">
             <ShieldCheck size={14} strokeWidth={2.25} />
-            <span className="text-xs font-medium">SBMS — Student Behavior Management System</span>
+            <span className="text-xs font-medium">
+              <span className="font-header font-extrabold tracking-tight">SBMS</span> — Student Behavior Management
+              System
+            </span>
           </div>
           <p className="text-[11px]">A companion to your school's management system.</p>
         </div>

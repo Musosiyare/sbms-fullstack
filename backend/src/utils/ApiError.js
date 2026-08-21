@@ -9,8 +9,8 @@ class ApiError extends Error {
   static badRequest(message, field) {
     return new ApiError(400, "VALIDATION_ERROR", message, field);
   }
-  static unauthorized(message = "Unauthorized") {
-    return new ApiError(401, "UNAUTHORIZED", message);
+  static unauthorized(message = "Unauthorized", code = "UNAUTHORIZED") {
+    return new ApiError(401, code, message);
   }
   static forbidden(message = "Forbidden", code = "FORBIDDEN") {
     return new ApiError(403, code, message);

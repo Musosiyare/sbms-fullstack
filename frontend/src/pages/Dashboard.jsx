@@ -849,6 +849,37 @@ function DeliberationModal({ student, termId, academicYearId, isCurrentAcademicY
       setError("Deliberation decisions can only be made for the current academic year.");
       return;
     }
+
+    const isChange = !!student.deliberation;
+    const ok = await confirm({
+      title: isChange ? "Confirm decision change" : "Confirm deliberation decision",
+      message: (
+        <>
+          {isChange ? (
+            <>
+              Change the decision for{" "}
+              <strong className="font-semibold text-black">
+                {student.firstName} {student.lastName}
+              </strong>{" "}
+              from "{decisionLabel(student.deliberation.decision, student.deliberation.termName)}" to "
+              {decisionLabel(decision, student.deliberation.termName)}"?
+            </>
+          ) : (
+            <>
+              Record{" "}
+              <strong className="font-semibold text-black">
+                {student.firstName} {student.lastName}
+              </strong>{" "}
+              as "{decisionLabel(decision, null)}"?
+            </>
+          )}
+        </>
+      ),
+      confirmText: isChange ? "Yes, change decision" : "Yes, record decision",
+      tone: decision === "dismissed_permanently" ? "danger" : undefined,
+    });
+    if (!ok) return;
+
     setSaving(true);
     setError("");
     try {
@@ -1017,8 +1048,19 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showOverview, scope.academicYearId, scope.termId]);
 
-  const pendingDeliberation = useMemo(() => exceededStudents?.filter((s) => !s.deliberation) ?? [], [exceededStudents]);
-  const deliberatedStudents = useMemo(() => exceededStudents?.filter((s) => s.deliberation) ?? [], [exceededStudents]);
+  // Both deliberation queues are sorted A-Z by student name (not by
+  // when they were flagged/decided) so staff can find a particular
+  // student quickly regardless of which list they're in.
+  const byStudentName = (a, b) =>
+    `${a.firstName || ""} ${a.lastName || ""}`.localeCompare(`${b.firstName || ""} ${b.lastName || ""}`);
+  const pendingDeliberation = useMemo(
+    () => (exceededStudents?.filter((s) => !s.deliberation) ?? []).sort(byStudentName),
+    [exceededStudents]
+  );
+  const deliberatedStudents = useMemo(
+    () => (exceededStudents?.filter((s) => s.deliberation) ?? []).sort(byStudentName),
+    [exceededStudents]
+  );
   const canDecide = CAN_DECIDE.includes(user.sbmsRole);
   const canDecideNow = canDecide && scope.isCurrentAcademicYear;
 

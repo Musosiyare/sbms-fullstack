@@ -4,6 +4,7 @@ const ctrl = require("../controllers/referenceController");
 
 router.use(authenticate, scopeToSchool);
 
+router.get("/school", ctrl.school);
 router.get("/academic-years", ctrl.academicYears);
 router.get("/terms", ctrl.terms);
 router.get("/classes", ctrl.classes);
